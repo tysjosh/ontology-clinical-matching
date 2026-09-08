@@ -1,0 +1,15 @@
+# Primary experiment configuration for a real-data run of the Causal Witness
+# Patient World Model (task 18 real-data wiring). Composed with
+# configs/datasets/actg175_v3_2.yaml and configs/target_trials/main.yaml via
+# src.infra.config.load_config().
+#
+# NOTE: this is distinct from configs/experiments/lambda_grid.yaml, which is
+# only the frozen 3x3 (lambda_state, lambda_balance) hyperparameter grid
+# consumed by src/models/losses.py -- not a full experiment config.
+experiment_name: "real_data_primary"
+seed: 20240101
+exploratory: false
+witness_policy: "ALL_REQUIRED"
+tags:
+  - primary
+  - real_data

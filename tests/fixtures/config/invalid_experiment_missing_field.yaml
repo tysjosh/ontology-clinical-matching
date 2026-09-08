@@ -1,0 +1,3 @@
+experiment_name: "paper_primary"
+exploratory: false
+witness_policy: "ALL_REQUIRED"

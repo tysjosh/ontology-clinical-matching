@@ -1,0 +1,7 @@
+patient_id,arm,treatment_label
+SYN-001,1,zidovudine+didanosine
+SYN-002,0,zidovudine
+SYN-003,1,zidovudine+didanosine
+SYN-004,0,zidovudine
+SYN-005,2,zalcitabine
+SYN-006,3,zidovudine+zalcitabine

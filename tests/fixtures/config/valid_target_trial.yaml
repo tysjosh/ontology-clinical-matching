@@ -1,0 +1,30 @@
+population:
+  eligibility: "hiv_positive AND baseline_cd4_in_range AND age_in_range"
+intervention:
+  concept_id: "zidovudine+didanosine"
+comparator:
+  concept_id: "zidovudine"
+time_zero:
+  definition: "randomized_treatment_assignment"
+follow_up:
+  primary: "complete_available"
+  secondary_horizon_weeks: 96
+outcome:
+  type: "composite_time_to_event"
+censoring:
+  definition: "administrative_end_of_follow_up"
+estimand:
+  primary: "marginal_hazard_ratio_itt"
+analysis:
+  method: "ipcw_aipw"
+causal_diagram:
+  nodes: ["X", "A", "L", "Y", "S", "C"]
+adjustment_set:
+  - age
+  - weight
+  - sex
+assumptions:
+  consistency: true
+  conditional_exchangeability: true
+  positivity: true
+  no_interference: true

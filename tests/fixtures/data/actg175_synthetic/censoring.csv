@@ -1,0 +1,7 @@
+patient_id,censored,censoring_time_days,censoring_reason
+SYN-001,True,672.0,administrative_end_of_follow_up
+SYN-002,False,540.0,
+SYN-003,False,300.0,
+SYN-004,True,672.0,administrative_end_of_follow_up
+SYN-005,False,210.0,
+SYN-006,True,672.0,administrative_end_of_follow_up

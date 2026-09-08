@@ -1,0 +1,1148 @@
+{
+  "pbtResults": {},
+  "executionHistory": {
+    "1.1 Implement config loading and validation": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756546579
+      },
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756577527
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788757225121
+      }
+    ],
+    "1.2 Implement deterministic seeding": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756546664
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788757121320
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788757225666
+      }
+    ],
+    "1.3 Implement structured logging": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756546701
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788757234713
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788757330559
+      }
+    ],
+    "1.4 Implement the nondeterminism registry": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756546737
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788757333684
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788757408851
+      }
+    ],
+    "1.5 Implement experiment identity and the experiment registry": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756546765
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788757411679
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788757537987
+      }
+    ],
+    "1.6 Implement artifact manifests and the privacy scanner": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756546792
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788757541272
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788758009236
+      }
+    ],
+    "1.7 Implement the results-directory convention and one-command smoke experiment": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756546816
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788758011975
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788758393522
+      }
+    ],
+    "2.1 Implement secret handling and export scanning": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756546873
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788758423280
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788759789940
+      }
+    ],
+    "2.2 Implement minimum-cell-size enforcement for public artifacts": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756546910
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788759794294
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788760057869
+      }
+    ],
+    "3.1 Implement the eligibility DSL": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756546937
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788760061143
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788760571572
+      }
+    ],
+    "3.2 Implement time-zero validation": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756546954
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788760596039
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788760734845
+      }
+    ],
+    "3.3 Implement the composite endpoint": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756546980
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788760738699
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788760906318
+      }
+    ],
+    "3.4 Implement the protocol-consistency checker": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756546998
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788760910414
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788761099219
+      }
+    ],
+    "4. Implement estimand-alignment reporting": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756547017
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788761102784
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788761425435
+      }
+    ],
+    "5.1 Implement the ACTG175 raw-data loader": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756547038
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788761634642
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788762159315
+      }
+    ],
+    "5.2 Implement the ClinicalEvent model and reproducible sorting": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756547063
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788762163409
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788762363247
+      }
+    ],
+    "5.3 Implement concept/unit normalization": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756547085
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788762363429
+      }
+    ],
+    "5.4 Implement patient timeline construction": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756547106
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788762367300
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788762536206
+      }
+    ],
+    "5.5 Implement leakage auditing and the CD8 double-use safeguard": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756547123
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788762540664
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788762761700
+      }
+    ],
+    "5.6 Implement missing-data handling": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756547142
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788762764739
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788762962115
+      }
+    ],
+    "5.7 Implement the data-quality report": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756547160
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788762965186
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788763248968
+      }
+    ],
+    "6.1 Implement the sealed internal randomized reference": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756547180
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788763291360
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788763877058
+      }
+    ],
+    "6.2 Implement patient-level stratified splitting": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756547201
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788763880370
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788764198031
+      }
+    ],
+    "6.3 Implement development-only preprocessing fitting": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756547223
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788764201417
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788764369069
+      }
+    ],
+    "6.4 Implement the observationalization mechanism": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756547249
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788764385562
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788764886287
+      }
+    ],
+    "6.5 Implement one-time pilot recalibration support": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756547270
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788764889912
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788765212550
+      }
+    ],
+    "6.6 Implement the cohort-flow table": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756547286
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788765215887
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788769077570
+      }
+    ],
+    "7.1 Implement overlap diagnostics": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756547309
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788769382325
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788769537148
+      }
+    ],
+    "7.2 Implement causal baselines": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756547336
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788769540716
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788770198699
+      }
+    ],
+    "7.3 Implement the baseline-treatment estimand narrowing check": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756547355
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788770203521
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788770430148
+      }
+    ],
+    "7.4 Implement negative controls": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756547384
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788770433746
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788770973679
+      }
+    ],
+    "8.1 Implement the sequence-model baseline": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756547406
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788771471422
+      }
+    ],
+    "8.2 Implement training infrastructure": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756547437
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788771607399
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788771801860
+      }
+    ],
+    "8.3 Implement factual prediction metrics": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756547461
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788771805652
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788772098336
+      }
+    ],
+    "9.1 Implement the separately-encoded intervention-aware architecture": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756547486
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788772123152
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788772524583
+      }
+    ],
+    "9.2 Implement factual/counterfactual branch heads": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756547505
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788772529980
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788772677889
+      }
+    ],
+    "9.3 Implement the training objective": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756547560
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788772683334
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788772866434
+      }
+    ],
+    "9.4 Implement treatment-effect aggregation": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756547581
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788772870261
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788773023295
+      }
+    ],
+    "9.5 Implement intervention invariance property tests": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756547603
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788773026920
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788773177827
+      }
+    ],
+    "10.1 Implement calibration fitting": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756547624
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788773350272
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788773528675
+      }
+    ],
+    "10.2 Implement patient-level bootstrap": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756547648
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788773529281
+      }
+    ],
+    "10.3 Implement out-of-distribution scoring": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756547669
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788773534101
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788773660005
+      }
+    ],
+    "10.4 Implement the patient-support gate": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756547690
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788773665878
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788773828766
+      }
+    ],
+    "10.5 Implement selective-prediction metrics": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756547710
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788773832976
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788774114633
+      }
+    ],
+    "11.1 Implement the causal witness": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756547733
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788774374424
+      }
+    ],
+    "11.2 Implement the clinical witness": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756547755
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788774378580
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788774497230
+      }
+    ],
+    "11.3 Implement witness aggregation and the release gate": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756547776
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788774502713
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788774709730
+      }
+    ],
+    "11.4 Implement the audit report": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756547803
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788774713590
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788774892850
+      }
+    ],
+    "12.1 Implement ablation execution and result collection": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756547824
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788775035093
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788775499646
+      }
+    ],
+    "13.1 Implement sensitivity-analysis robustness variants": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756547847
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788775699804
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788775887685
+      }
+    ],
+    "13.2 Document out-of-scope robustness checks": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756547871
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788775699972
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788775888461
+      }
+    ],
+    "14.1 Implement predictive-causal association analysis with the small-sample guard": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756547896
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788776113739
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788776293413
+      }
+    ],
+    "14.2 Implement the causal-recovery metrics": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756547920
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788776114583
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788776294078
+      }
+    ],
+    "15.1 Implement the principal figures": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756547947
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788776455465
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788777181380
+      }
+    ],
+    "15.2 Implement the model card and responsible-use documentation": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756547971
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788777187967
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788777408444
+      }
+    ],
+    "15.3 Implement the claims lint test": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756547996
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788777413605
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788777649593
+      }
+    ],
+    "15.4 Implement the one-command reproduction entry point": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756548019
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788777655111
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788777998578
+      }
+    ],
+    "16. Implement the go/no-go checklist and locked-evaluation gating": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756548046
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788778007957
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788778355271
+      }
+    ],
+    "17. Implement frozen-value regression tests": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756548068
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788778361078
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788778532394
+      }
+    ],
+    "18. Wire the full pipeline end-to-end and verify reproducibility": [
+      {
+        "executionId": "9b3ac46e-b14d-45ed-9d59-b5ba621d1e19",
+        "chatSessionId": "sess_d44dc29b-9312-4bbe-b809-856b4f33f6b1",
+        "timestamp": 1788756548090
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788778538571
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788787250980
+      }
+    ],
+    "1. Set up repository foundation and experiment infrastructure": [
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788758393711
+      }
+    ],
+    "2. Implement clinical-data privacy and security scaffolding": [
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788760057933
+      }
+    ],
+    "3. Implement target-trial protocol specification (protocols module)": [
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788760588463
+      }
+    ],
+    "5. Implement the clinical data pipeline (data module)": [
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788761631219
+      }
+    ],
+    "6. Implement cohort construction, the sealed reference, and analysis splits (cohorts module)": [
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788763653975
+      }
+    ],
+    "7. Implement propensity estimation and overlap diagnostics (causal module)": [
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788769112661
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788769378937
+      }
+    ],
+    "8. Implement predictive baselines (models module)": [
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788770986933
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788772098389
+      }
+    ],
+    "9. Implement the intervention object and intervention-aware model (models module)": [
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788772109542
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788772525161
+      }
+    ],
+    "10. Implement uncertainty estimation, calibration, and bootstrap (uncertainty module)": [
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788773187179
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788773345525
+      }
+    ],
+    "11. Implement the three witnesses (witnesses module)": [
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788774125202
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788774373868
+      }
+    ],
+    "12. Implement the ablation framework (evaluation module)": [
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788774914358
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788775031242
+      }
+    ],
+    "13. Implement robustness analyses (evaluation module)": [
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788775510978
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788775694135
+      }
+    ],
+    "14. Implement the statistical analysis plan (evaluation module)": [
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788775900068
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788776107872
+      }
+    ],
+    "15. Implement reporting artifacts (reporting module)": [
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788776321902
+      },
+      {
+        "executionId": "6734a1a3-d0e3-4135-a754-e3805f0022cf",
+        "chatSessionId": "sess_06d9da64-f4bf-4b51-a8fb-92613ff63a95",
+        "timestamp": 1788776451208
+      }
+    ]
+  }
+}

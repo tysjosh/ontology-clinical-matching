@@ -1,0 +1,7 @@
+patient_id,age,sex,race_ethnicity,weight_kg,hemophilia,homosexual_activity,iv_drug_use_history
+SYN-001,34,M,white,72.5,False,True,False
+SYN-002,29,F,black,61.0,False,False,False
+SYN-003,41,M,hispanic,80.2,True,False,False
+SYN-004,37,F,white,58.4,False,False,True
+SYN-005,45,M,asian,75.0,False,True,False
+SYN-006,31,M,white,68.9,False,False,False

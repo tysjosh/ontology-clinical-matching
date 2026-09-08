@@ -1,0 +1,28 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.hypothesis/
+.coverage
+htmlcov/
+dist/
+build/
+
+# Experiment outputs and clinical data are never committed.
+results/*
+!results/.gitkeep
+data/raw/
+# Sealed internal randomized reference artifacts (Requirement 15.1): the
+# sealed reference is a generated artifact whose access is process-gated by
+# a LockedEvaluationToken. It is never tracked, so cloning the repository
+# cannot reveal it.
+reference/
+*.parquet
+*.sqlite
+
+.DS_Store

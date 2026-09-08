@@ -1,0 +1,12 @@
+repos:
+  - repo: local
+    hooks:
+      - id: check-no-secrets
+        name: check for committed secrets
+        description: >
+          Fails the commit if a staged file contains a secret-shaped string
+          (Requirement 2.4). See docs/secrets.md.
+        entry: python scripts/check_no_secrets.py
+        language: system
+        pass_filenames: false
+        always_run: true

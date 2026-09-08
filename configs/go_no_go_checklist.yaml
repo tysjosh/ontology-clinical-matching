@@ -1,0 +1,56 @@
+# Go/no-go checklist template (task 16; `decisions.md` Section 21;
+# `design.md` "Correctness Property 1: Sealed reference isolation").
+#
+# `scripts/check_go_no_go.py --checklist <this file>` reads this config and
+# mints a `LockedEvaluationToken` only when every item below is `true`.
+#
+# Scoping note: this file's items are booleans that some *other* process
+# (a human reviewer ticking a box, or an earlier automated pipeline stage
+# writing its own result here) has already determined. `check_go_no_go.py`
+# does not re-derive any of these checks itself -- it only gates on
+# whether they have all been marked complete. See
+# `scripts/check_go_no_go.py`'s module docstring for the full rationale.
+#
+# Every item defaults to `false` (unresolved). Flip an item to `true` only
+# once the corresponding real-world check has actually been performed and
+# verified -- never as a formality.
+items:
+  # Protocol, causal diagram, and adjustment set are frozen in decisions.md
+  # (Sections 3-7, 13) and must not be re-derived after this point.
+  frozen_protocol: false
+  frozen_causal_diagram: false
+  frozen_adjustment_set: false
+
+  # decisions.md Section 8: the estimand-alignment report (task 4) has been
+  # generated and reviewed.
+  estimand_alignment_checked: false
+
+  # decisions.md Section 8: the sealed internal reference has not been read
+  # by any model-selection or development process.
+  reference_inaccessible_to_model_selection: false
+
+  # task 5.5's leakage-audit suite has been run and passed.
+  leakage_tests_passed: false
+
+  # task 6.2/7's stratified split and cross-fitted propensity folds have
+  # been verified to have zero train/prediction overlap.
+  splits_cross_fitting_verified: false
+
+  # Overlap/support/witness thresholds (decisions.md Sections 12, 16) are
+  # frozen and have not been tuned against test-split performance.
+  thresholds_frozen: false
+
+  # decisions.md Section 4: the target population definition is final.
+  target_population_defined: false
+
+  # decisions.md Section 19: the statistical analysis plan (comparisons,
+  # correction procedure) is locked and has not been altered post hoc.
+  statistical_procedures_locked: false
+
+  # task 2.1/2.2: privacy/export scans have been run over intended release
+  # artifacts and passed.
+  privacy_checks_passed: false
+
+  # task 15.4: `scripts/run_paper.py` has been confirmed to reproduce
+  # tables/figures from saved predictions via one documented command.
+  one_command_reproduction_verified: false

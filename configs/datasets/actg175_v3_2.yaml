@@ -1,0 +1,45 @@
+# Frozen dataset contract for the Causal Witness Patient World Model.
+#
+# Every value here is taken directly from
+# `.kiro/specs/causal-witness-pwm/decisions.md` Section 2 (dataset),
+# Section 3 (treatment comparison), Section 5 (time zero / follow-up), and
+# Section 6 (endpoints), and must not be re-derived or re-chosen. This file
+# loads directly into `src.data.contract.DatasetContract`. The pipeline
+# refuses to run without this contract (Requirement 5.2).
+
+name: "LongCART::ACTG175"
+version: "3.2"
+
+population:
+  size: 2139
+  description: >-
+    Packaged population before treatment-arm restriction. The analysis
+    cohort is further restricted to ACTG arms 0 and 1 only
+    (decisions.md Section 3-4); arms 2 and 3 are excluded before any
+    modeling, with no exceptions.
+
+treatment: "zidovudine+didanosine"
+comparator: "zidovudine"
+endpoint: "composite_time_to_event"
+
+study_period: >-
+  Time zero is randomized treatment assignment. Primary follow-up is
+  complete available trial follow-up, with a secondary fixed horizon of
+  96 weeks and landmark measurements at baseline, week 20, and week 96
+  (where available). Censoring is administrative end of follow-up or last
+  recorded observation (decisions.md Section 5).
+
+available_modalities:
+  - "baseline_covariates"
+  - "longitudinal_cd4_cd8"
+  - "treatment"
+  - "censoring"
+  - "clinical_event_outcomes"
+
+reference_effect_source: "Hammer SM, et al. NEJM 1996 (PMID 8813038)"
+
+# Computed at ingestion over the six compatibility CSVs under
+# `data/raw/actg175_v3_2/`, using `compute_actg175_checksum()`. The source
+# distributions and their independent archive hashes are recorded in
+# `docs/data_access.md`.
+checksum_sha256: "df3867e608060bbd965c299cb6f071fabd53c82e7e9a1a5121078fba6ffb83e3"

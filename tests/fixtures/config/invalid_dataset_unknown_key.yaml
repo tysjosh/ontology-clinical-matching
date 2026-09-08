@@ -1,0 +1,14 @@
+name: LongCART::ACTG175
+version: "3.2"
+population:
+  size: 2139
+  description: "Packaged population before treatment-arm restriction."
+treatment: "zidovudine+didanosine"
+comparator: "zidovudine"
+endpoint: "composite_time_to_event"
+study_period: "Test fixture study-period description."
+available_modalities:
+  - baseline_covariates
+reference_effect_source: "Hammer SM, et al. NEJM 1996 (PMID 8813038)"
+checksum_sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+unexpected_extra_field: "this should not be here"

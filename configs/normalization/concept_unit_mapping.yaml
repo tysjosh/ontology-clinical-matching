@@ -1,0 +1,65 @@
+# Frozen concept/unit normalization mapping for the Causal Witness Patient
+# World Model (Requirement 5.7-5.8; `design.md` Section 3.3: "deterministic,
+# versioned concept/unit mapping table (a static YAML lookup table checked
+# into configs/)").
+#
+# This table maps raw ACTG175 source field names / codes
+# (`src/data/loaders/actg175.py`) to normalized concept identifiers and
+# units. It is deterministic (a pure static lookup) and versioned: any
+# change to a mapping value requires bumping `version`, never an in-place
+# edit that silently changes what an already-mapped raw code resolves to.
+#
+# Raw codes not present in `mappings` are unresolved: `normalize_concept()`
+# raises `UnresolvedConceptFlag(raw_code)` rather than dropping them
+# silently (Requirement 5.8). This deliberately includes ACTG175 treatment
+# arms 2 and 3 (zalcitabine-containing regimens) — `decisions.md` Section 3
+# excludes them before any modeling "with no exceptions," so no normalized
+# treatment concept is defined for them here; any code path that reaches
+# them via normalization is expected to surface the flag rather than
+# silently proceed.
+
+version: "1.0.0"
+
+mappings:
+  # Treatment arm codes (`decisions.md` Section 3; `configs/target_trials/main.yaml`
+  # intervention/comparator concept_ids). Only arms 0 and 1 are in scope for
+  # the analysis cohort.
+  arm_0:
+    concept_id: "zidovudine"
+    unit: null
+  arm_1:
+    concept_id: "zidovudine+didanosine"
+    unit: null
+
+  # Baseline and longitudinal CD4/CD8 (`decisions.md` Section 13 adjustment
+  # set; Section 6 endpoint components). Baseline and longitudinal raw field
+  # names map to the same normalized concept, since they measure the same
+  # underlying quantity at different timepoints.
+  baseline_cd4:
+    concept_id: "cd4_count"
+    unit: "cells/mm3"
+  baseline_cd8:
+    concept_id: "cd8_count"
+    unit: "cells/mm3"
+  cd4:
+    concept_id: "cd4_count"
+    unit: "cells/mm3"
+  cd8:
+    concept_id: "cd8_count"
+    unit: "cells/mm3"
+
+  # Demographic baseline covariates.
+  age:
+    concept_id: "age"
+    unit: "years"
+  weight_kg:
+    concept_id: "weight"
+    unit: "kg"
+
+  # Clinical baseline covariates.
+  karnofsky_score:
+    concept_id: "karnofsky_score"
+    unit: "score"
+  prior_art_exposure_days:
+    concept_id: "prior_antiretroviral_exposure_duration"
+    unit: "days"

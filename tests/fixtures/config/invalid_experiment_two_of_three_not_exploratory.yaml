@@ -1,0 +1,4 @@
+experiment_name: "paper_primary"
+seed: 12345
+exploratory: false
+witness_policy: "TWO_OF_THREE"

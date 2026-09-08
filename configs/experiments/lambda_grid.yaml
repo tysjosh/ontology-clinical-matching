@@ -1,0 +1,16 @@
+# Frozen 3x3 lambda grid for the intervention-aware model's training
+# objective (`decisions.md` Section 14.3):
+#
+#   L = L_survival + lambda_state * L_CD4/CD8 + lambda_balance * L_representation_balance
+#
+# lambda_state and lambda_balance are each drawn from this frozen
+# three-value grid, crossed to give the 9 frozen (lambda_state,
+# lambda_balance) combinations. Selection between the 9 combinations is
+# made by validation-split composite-endpoint concordance ONLY (never
+# development- or test-split data) -- see
+# `src/models/losses.py::select_lambda_by_validation_concordance`.
+#
+# This file is frozen: do not add, remove, or reorder values without a
+# documented amendment (decisions.md Section 25).
+lambda_state: [0.1, 0.3, 1.0]
+lambda_balance: [0.1, 0.3, 1.0]

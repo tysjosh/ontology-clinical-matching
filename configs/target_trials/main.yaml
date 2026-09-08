@@ -1,0 +1,165 @@
+# Frozen target-trial specification for the Causal Witness Patient World Model.
+#
+# Every value here is taken directly from `.kiro/specs/causal-witness-pwm/decisions.md`
+# (Sections 3-7, 13) and must not be re-derived or re-chosen. This file loads
+# directly into `src.protocols.schema.TargetTrialSpec`. An amendment after
+# analysis lock requires a new `version` string and a logged entry in
+# `decisions.md` Section 25 — never an in-place edit of a locked value.
+
+version: "1.0.0"
+
+population:
+  eligibility_criteria:
+    - "hiv_positive_baseline_diagnosis"
+    - "baseline_cd4_within_actg175_eligibility_range"
+    - "treatment_arm_0_or_1"
+    - "valid_baseline_treatment_and_covariate_records"
+    - "nonnegative_recorded_follow_up_time"
+    - "sufficient_information_for_primary_composite_endpoint"
+  eligibility_expression: >-
+    hiv_positive_baseline_diagnosis
+    AND baseline_cd4_within_actg175_eligibility_range
+    AND treatment_arm_0_or_1
+    AND valid_baseline_treatment_and_covariate_records
+    AND nonnegative_recorded_follow_up_time
+    AND sufficient_information_for_primary_composite_endpoint
+  excluded_arms:
+    - "arm_2_zalcitabine"
+    - "arm_3_zidovudine_plus_zalcitabine"
+  source_population: "LongCART::ACTG175 v3.2, 2139 patients before treatment-arm restriction"
+  post_hoc_outcome_exclusion_permitted: false
+
+intervention:
+  concept_id: "zidovudine+didanosine"
+  description: "ACTG175 arm 1: zidovudine + didanosine"
+  assignment_time: "randomization"
+  strategy: "intention_to_treat"
+  treatment_switching_handling: "recorded_and_described_descriptively_ignored_in_primary_itt_analysis"
+
+comparator:
+  concept_id: "zidovudine"
+  description: "ACTG175 arm 0: zidovudine alone"
+  assignment_time: "randomization"
+  strategy: "intention_to_treat"
+  treatment_switching_handling: "recorded_and_described_descriptively_ignored_in_primary_itt_analysis"
+
+time_zero:
+  definition: "randomized_treatment_assignment"
+  description: "Time zero is the moment of randomized treatment assignment; eligibility and baseline features must precede or coincide with it."
+
+follow_up:
+  primary: "complete_available_trial_follow_up"
+  secondary_horizon_weeks: 96
+  landmark_weeks: [0, 20, 96]
+  censoring_note: "administrative_end_of_follow_up_or_last_recorded_observation"
+
+outcome:
+  type: "composite_time_to_event"
+  primary_definition: "time_to_first_of_50pct_cd4_decline_or_aids_defining_event_or_death"
+  components:
+    - "cd4_decline_50_percent_from_baseline"
+    - "aids_defining_event"
+    - "death"
+  secondary_endpoints:
+    - "96_week_composite_event_risk_binary"
+    - "week_20_cd4_count_continuous"
+    - "week_96_cd4_count_continuous"
+    - "longitudinal_cd4_trajectory_sequence"
+
+censoring:
+  definition: "administrative_end_of_follow_up_or_last_recorded_observation"
+  mechanism: "administrative"
+
+estimand:
+  primary: "marginal_hazard_ratio_itt"
+  secondary: "marginal_96_week_risk_difference"
+  external_reference_hr: 0.50
+  external_reference_source: "Hammer SM, et al., NEJM 1996. PMID 8813038, DOI 10.1056/NEJM199610103351501"
+  internal_reference_note: >-
+    Internal randomized reference is computed exactly once on the complete
+    eligible arm-0/arm-1 cohort before any splitting or observationalization,
+    sealed, and withheld from model development until the locked
+    external-evaluation stage (decisions.md Section 8).
+
+analysis:
+  method: "ipcw_aipw"
+  propensity_model: "logistic_regression_primary_xgboost_sensitivity"
+  weight_clipping: "1st_99th_percentile_primary"
+  baseline_estimators:
+    - "unadjusted_kaplan_meier"
+    - "unadjusted_cox"
+    - "covariate_adjusted_cox"
+    - "propensity_weighted_marginal_cox"
+    - "outcome_regression_96_week_risk"
+    - "ipcw_ipw"
+    - "ipcw_aipw_primary"
+
+causal_diagram:
+  nodes: ["X", "A", "L", "Y", "S", "C"]
+  edges:
+    - "X->A"
+    - "A->L"
+    - "L->Y"
+    - "X->Y"
+    - "X->S"
+    - "A->S"
+    - "A->C"
+    - "X->C"
+    - "L->C"
+  description: >-
+    Baseline covariates X affect treatment A, longitudinal state L, and
+    outcome Y directly; X and A jointly determine the observational-selection
+    indicator S; A, X, and L jointly determine censoring C
+    (decisions.md Section 13).
+
+adjustment_set:
+  - "age"
+  - "weight"
+  - "sex"
+  - "race_ethnicity"
+  - "hemophilia"
+  - "homosexual_activity"
+  - "intravenous_drug_use_history"
+  - "karnofsky_score"
+  - "prior_opportunistic_infection"
+  - "symptomatic_status"
+  - "baseline_cd4"
+  - "baseline_cd8"
+  - "prior_antiretroviral_exposure_and_duration"
+
+assumptions:
+  consistency: >-
+    A patient's observed outcome under their received treatment equals the
+    potential outcome under that treatment version; treatment versions are
+    limited to the two frozen arms (zidovudine+didanosine vs. zidovudine
+    alone) with no unmodeled variation in dose/route/formulation.
+  conditional_exchangeability: >-
+    Conditional on the frozen baseline adjustment set (see `adjustment_set`),
+    treatment assignment is independent of the potential outcomes. Supported
+    in the randomized-arm subset by randomization itself, and in the
+    pseudo-observational cohort by the fully documented, covariate-dependent
+    observationalization mechanism (decisions.md Section 9), which is a known
+    function of the same adjustment-set covariates.
+  positivity: >-
+    Every patient has a nonzero probability of receiving either treatment
+    arm given their covariates. Operationalized as the common-support rule
+    0.10 <= propensity <= 0.90 (primary) / 0.05 <= propensity <= 0.95
+    (sensitivity), with both arms retaining >=100 patients and effective
+    sample size >=100 per arm (decisions.md Section 12).
+  no_interference: >-
+    One patient's treatment assignment does not affect another patient's
+    potential outcomes. Defensible for ACTG175 because patients are
+    independently enrolled, followed, and treated across distinct sites with
+    no shared-exposure or contagion mechanism relevant to the composite
+    endpoint.
+  missing_data: >-
+    Missingness in baseline covariates and longitudinal CD4/CD8 measurements
+    is handled via missingness indicators and, if used, fold-safe multiple
+    imputation fit on development/training folds only (Requirement 5.12-5.13).
+    Missing-data assumptions are stated per variable in the data-quality
+    report and are not assumed missing-completely-at-random by default.
+  censoring: >-
+    Censoring is administrative (end of follow-up or last recorded
+    observation) and is assumed independent of the outcome process given the
+    baseline adjustment set and treatment; IPCW is used wherever the causal
+    estimator requires censoring-adjustment (decisions.md Sections 5, 11).

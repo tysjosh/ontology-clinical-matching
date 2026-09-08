@@ -1,0 +1,7 @@
+patient_id,event_indicator,event_time_days,event_type
+SYN-001,False,672.0,
+SYN-002,True,540.0,cd4_decline
+SYN-003,True,300.0,aids_defining_event
+SYN-004,False,672.0,
+SYN-005,True,210.0,death
+SYN-006,False,672.0,

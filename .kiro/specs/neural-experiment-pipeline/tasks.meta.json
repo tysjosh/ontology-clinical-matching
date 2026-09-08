@@ -1,0 +1,362 @@
+{
+  "pbtResults": {},
+  "executionHistory": {
+    "1.1 Freeze the stronger-observational-selection coefficients": [
+      {
+        "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1788824958163
+      },
+      {
+        "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1788824967087
+      },
+      {
+        "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1788825350605
+      }
+    ],
+    "1.2 Freeze the cross-seed stability criterion": [
+      {
+        "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1788824958224
+      },
+      {
+        "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1788825353773
+      },
+      {
+        "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1788825650801
+      }
+    ],
+    "1.3 Record the `experiment_id` re-identification amendment": [
+      {
+        "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1788824958271
+      },
+      {
+        "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1788825653606
+      },
+      {
+        "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1788825889163
+      }
+    ],
+    "2.1 Declare pinned torch/numpy as an optional `neural` extra and retarget the venue": [
+      {
+        "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1788824958300
+      },
+      {
+        "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1788825903253
+      }
+    ],
+    "2.2 Enforce torch isolation mechanically": [
+      {
+        "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1788824958369
+      }
+    ],
+    "2.3 Record git provenance in every manifest": [
+      {
+        "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1788824958401
+      }
+    ],
+    "2.4 Fix the 21 Ruff violations and repair the secrets checker": [
+      {
+        "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1788824958452
+      }
+    ],
+    "2.5 Make the twelve go/no-go items mechanically checkable where possible": [
+      {
+        "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1788824958517
+      }
+    ],
+    "3. Implement the readiness ledger": [
+      {
+        "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1788824958567
+      }
+    ],
+    "4. Extend the reference guard with test-split isolation": [
+      {
+        "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1788824958622
+      }
+    ],
+    "5.1 Reconcile `run_causal_analysis.py` onto the single identity function": [
+      {
+        "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1788824958652
+      }
+    ],
+    "5.2 Re-verify the existing suite against the re-identified experiment ids": [
+      {
+        "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1788824958680
+      }
+    ],
+    "6.1 Implement scale-matched reference comparison": [
+      {
+        "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1788824958718
+      }
+    ],
+    "6.2 Implement the v2 re-seal path": [
+      {
+        "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1788824958751
+      }
+    ],
+    "7.1 Add the consumption and reference-access ledgers": [
+      {
+        "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1788824958783
+      }
+    ],
+    "7.2 Diagnose the overlap-support failure and the SMD measurement basis": [
+      {
+        "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1788824958813
+      }
+    ],
+    "7.3 Diagnose the positivity-warning and negative-control-outcome failures": [
+      {
+        "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1788824958847
+      }
+    ],
+    "8.1 Write dataset property tests": [
+      {
+        "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1788824958885
+      }
+    ],
+    "8.2 Write dataset error-path and fully-missing-column tests": [
+      {
+        "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1788824958916
+      }
+    ],
+    "9.1 Implement `TorchSequenceGRU`": [
+      {
+        "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1788824958947
+      }
+    ],
+    "9.2 Implement `TorchInterventionAwareModel`": [
+      {
+        "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1788824958979
+      }
+    ],
+    "9.3 Write channel-width and rollout-identity property tests": [
+      {
+        "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1788824959007
+      }
+    ],
+    "9.4 Parameterize the existing invariance properties over prototype and torch": [
+      {
+        "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1788824959044
+      }
+    ],
+    "10.1 Implement lambda selection and ensemble construction": [
+      {
+        "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1788824959079
+      }
+    ],
+    "10.2 Implement device resolution, seeding, and manifest recording": [
+      {
+        "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1788824959109
+      }
+    ],
+    "10.3 Write gradient, masking, and determinism tests": [
+      {
+        "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1788824959138
+      }
+    ],
+    "11. Checkpoint - ensure all tests pass in both environments": [
+      {
+        "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1788824959169
+      }
+    ],
+    "12.1 Implement `build_model` and the model-affecting projection": [
+      {
+        "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1788824959202
+      }
+    ],
+    "12.2 Populate the registry entry from the resolved config and variant": [
+      {
+        "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1788824959231
+      }
+    ],
+    "13. Expand the ablation matrix into twelve runs and bridge it to variants": [
+      {
+        "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1788824959290
+      }
+    ],
+    "14.1 Execute the six prediction-reuse ablation arms": [
+      {
+        "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1788824959321
+      }
+    ],
+    "14.2 Compute and record validation-only ablation metrics": [
+      {
+        "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1788824959352
+      }
+    ],
+    "14.3 Implement variant-collision detection": [
+      {
+        "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1788824959380
+      }
+    ],
+    "15.1 Emit the machine-readable stability result and wire the causal witness": [
+      {
+        "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1788824959413
+      }
+    ],
+    "16.1 Wire ensemble uncertainty and selective-prediction evaluation": [
+      {
+        "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1788824959436
+      }
+    ],
+    "17.1 Write public and protected audit artifacts with suppression": [
+      {
+        "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1788824959478
+      }
+    ],
+    "17.2 Call the audit builder from every estimate runner": [
+      {
+        "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1788824959506
+      }
+    ],
+    "18.1 Implement cross-seed aggregation under the frozen criterion": [
+      {
+        "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1788824959542
+      }
+    ],
+    "18.2 Record determinism verification in the readiness ledger": [
+      {
+        "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1788824959570
+      }
+    ],
+    "20. Extend the token minter with readiness, provenance, and nine-field binding": [
+      {
+        "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1788824959605
+      }
+    ],
+    "21.1 Implement the evaluation steps under a verified token": [
+      {
+        "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1788824959639
+      }
+    ],
+    "21.2 Implement the atomic commit and rehearse it end to end": [
+      {
+        "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1788824959669
+      }
+    ],
+    "22.1 Report the five headline comparisons": [
+      {
+        "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1788824959702
+      }
+    ],
+    "22.2 Report blocked, negative, and contradicting results honestly": [
+      {
+        "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1788824959731
+      }
+    ],
+    "24. Consolidate frozen-value regression tests and verify the pipeline end to end": [
+      {
+        "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1788824959764
+      }
+    ],
+    "1. Record the three prerequisite `decisions.md` Section 26 amendments": [
+      {
+        "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1788825889209
+      }
+    ]
+  }
+}
