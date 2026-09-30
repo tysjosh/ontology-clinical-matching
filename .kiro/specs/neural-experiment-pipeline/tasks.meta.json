@@ -62,6 +62,11 @@
         "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
         "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
         "timestamp": 1788825903253
+      },
+      {
+        "executionId": "d8c6481d-7082-48a2-847b-1155f506f102",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1790733621664
       }
     ],
     "2.2 Enforce torch isolation mechanically": [
@@ -69,6 +74,11 @@
         "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
         "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
         "timestamp": 1788824958369
+      },
+      {
+        "executionId": "d8c6481d-7082-48a2-847b-1155f506f102",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1790733622171
       }
     ],
     "2.3 Record git provenance in every manifest": [
@@ -76,6 +86,11 @@
         "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
         "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
         "timestamp": 1788824958401
+      },
+      {
+        "executionId": "d8c6481d-7082-48a2-847b-1155f506f102",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1790733623734
       }
     ],
     "2.4 Fix the 21 Ruff violations and repair the secrets checker": [
@@ -83,6 +98,11 @@
         "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
         "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
         "timestamp": 1788824958452
+      },
+      {
+        "executionId": "d8c6481d-7082-48a2-847b-1155f506f102",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1790733624979
       }
     ],
     "2.5 Make the twelve go/no-go items mechanically checkable where possible": [
@@ -90,6 +110,11 @@
         "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
         "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
         "timestamp": 1788824958517
+      },
+      {
+        "executionId": "d8c6481d-7082-48a2-847b-1155f506f102",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1790733626211
       }
     ],
     "3. Implement the readiness ledger": [
@@ -97,6 +122,11 @@
         "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
         "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
         "timestamp": 1788824958567
+      },
+      {
+        "executionId": "d8c6481d-7082-48a2-847b-1155f506f102",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1790733628856
       }
     ],
     "4. Extend the reference guard with test-split isolation": [
@@ -104,6 +134,11 @@
         "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
         "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
         "timestamp": 1788824958622
+      },
+      {
+        "executionId": "d8c6481d-7082-48a2-847b-1155f506f102",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1790733630061
       }
     ],
     "5.1 Reconcile `run_causal_analysis.py` onto the single identity function": [
@@ -111,6 +146,11 @@
         "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
         "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
         "timestamp": 1788824958652
+      },
+      {
+        "executionId": "d8c6481d-7082-48a2-847b-1155f506f102",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1790733631358
       }
     ],
     "5.2 Re-verify the existing suite against the re-identified experiment ids": [
@@ -118,6 +158,11 @@
         "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
         "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
         "timestamp": 1788824958680
+      },
+      {
+        "executionId": "d8c6481d-7082-48a2-847b-1155f506f102",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1790733633052
       }
     ],
     "6.1 Implement scale-matched reference comparison": [
@@ -125,6 +170,11 @@
         "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
         "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
         "timestamp": 1788824958718
+      },
+      {
+        "executionId": "d8c6481d-7082-48a2-847b-1155f506f102",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1790733635716
       }
     ],
     "6.2 Implement the v2 re-seal path": [
@@ -132,6 +182,11 @@
         "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
         "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
         "timestamp": 1788824958751
+      },
+      {
+        "executionId": "d8c6481d-7082-48a2-847b-1155f506f102",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1790733636920
       }
     ],
     "7.1 Add the consumption and reference-access ledgers": [
@@ -139,6 +194,11 @@
         "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
         "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
         "timestamp": 1788824958783
+      },
+      {
+        "executionId": "d8c6481d-7082-48a2-847b-1155f506f102",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1790733639611
       }
     ],
     "7.2 Diagnose the overlap-support failure and the SMD measurement basis": [
@@ -153,6 +213,11 @@
         "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
         "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
         "timestamp": 1788824958847
+      },
+      {
+        "executionId": "d8c6481d-7082-48a2-847b-1155f506f102",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1790733641406
       }
     ],
     "8.1 Write dataset property tests": [
@@ -160,6 +225,11 @@
         "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
         "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
         "timestamp": 1788824958885
+      },
+      {
+        "executionId": "d8c6481d-7082-48a2-847b-1155f506f102",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1790733642054
       }
     ],
     "8.2 Write dataset error-path and fully-missing-column tests": [
@@ -167,6 +237,11 @@
         "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
         "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
         "timestamp": 1788824958916
+      },
+      {
+        "executionId": "d8c6481d-7082-48a2-847b-1155f506f102",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1790733643411
       }
     ],
     "9.1 Implement `TorchSequenceGRU`": [
@@ -174,6 +249,11 @@
         "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
         "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
         "timestamp": 1788824958947
+      },
+      {
+        "executionId": "d8c6481d-7082-48a2-847b-1155f506f102",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1790733645959
       }
     ],
     "9.2 Implement `TorchInterventionAwareModel`": [
@@ -181,6 +261,11 @@
         "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
         "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
         "timestamp": 1788824958979
+      },
+      {
+        "executionId": "d8c6481d-7082-48a2-847b-1155f506f102",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1790733647258
       }
     ],
     "9.3 Write channel-width and rollout-identity property tests": [
@@ -188,6 +273,11 @@
         "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
         "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
         "timestamp": 1788824959007
+      },
+      {
+        "executionId": "d8c6481d-7082-48a2-847b-1155f506f102",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1790733648585
       }
     ],
     "9.4 Parameterize the existing invariance properties over prototype and torch": [
@@ -195,6 +285,11 @@
         "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
         "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
         "timestamp": 1788824959044
+      },
+      {
+        "executionId": "d8c6481d-7082-48a2-847b-1155f506f102",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1790733649860
       }
     ],
     "10.1 Implement lambda selection and ensemble construction": [
@@ -356,6 +451,41 @@
         "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
         "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
         "timestamp": 1788825889209
+      }
+    ],
+    "2. Initialize the repository and declare the neural dependency extra": [
+      {
+        "executionId": "d8c6481d-7082-48a2-847b-1155f506f102",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1790733626267
+      }
+    ],
+    "5. Extend `ExperimentConfig` with validated variant overrides": [
+      {
+        "executionId": "d8c6481d-7082-48a2-847b-1155f506f102",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1790733633090
+      }
+    ],
+    "6. Extend the sealed reference to carry risk-scale quantities": [
+      {
+        "executionId": "d8c6481d-7082-48a2-847b-1155f506f102",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1790733636952
+      }
+    ],
+    "8. Implement the tensor dataset builder": [
+      {
+        "executionId": "d8c6481d-7082-48a2-847b-1155f506f102",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1790733643451
+      }
+    ],
+    "9. Implement the production torch models": [
+      {
+        "executionId": "d8c6481d-7082-48a2-847b-1155f506f102",
+        "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
+        "timestamp": 1790733649891
       }
     ]
   }
