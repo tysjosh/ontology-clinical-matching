@@ -6,8 +6,6 @@ Section 14.3 "Frozen training objective").
 
 from __future__ import annotations
 
-import math
-
 import pytest
 
 from models.losses import (

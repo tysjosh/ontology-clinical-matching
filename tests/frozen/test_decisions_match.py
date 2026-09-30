@@ -450,3 +450,64 @@ def test_section_26_cross_seed_stability_criterion_matches_amendment_text():
         "verbatim in decisions.md Section 26; resolve this by amending "
         "decisions.md, never by editing the constant to match the code"
     )
+
+
+# ---------------------------------------------------------------------------
+# decisions.md Section 25 -- the frozen GRU hidden width, shared by both
+# torch models. Lives here rather than in `tests/neural/` because it is a
+# frozen-value consistency assertion spanning two modules, which is exactly
+# this file's purpose; the torch dependency is confined to the test body by
+# `importorskip` so the file stays importable (and the rest of it runnable)
+# without torch installed.
+# ---------------------------------------------------------------------------
+
+
+def test_section_25_hidden_width_is_one_shared_value():
+    """`decisions.md` Section 25: "Hidden width: `hidden_size = 16` for both
+    the sequence-GRU baseline and the intervention-aware model's
+    `GRUTransition`".
+
+    The word "both" is the substance of this test. The frozen decision is
+    not "each model uses 16"; it is that the two models share *one* width,
+    because the treatment-as-feature vs. explicit-channel ablation contrast
+    (`decisions.md` Section 17 items 2-3) isolates the representational
+    difference only if capacity is held equal. Two independent literals
+    could drift to 16 and 32 with every other test still passing and
+    silently invalidate that contrast, so this asserts both that the value
+    is 16 *and* that the two exported names are the same value -- sourced
+    from the one canonical definition in `models.dataset`.
+    """
+    pytest.importorskip("torch")
+
+    from models.dataset import FROZEN_HIDDEN_SIZE
+    from models.torch_intervention_aware import HIDDEN_SIZE
+    from models.torch_sequence_gru import FROZEN_HIDDEN_SIZE as SEQUENCE_GRU_HIDDEN_SIZE
+
+    assert FROZEN_HIDDEN_SIZE == 16
+    assert SEQUENCE_GRU_HIDDEN_SIZE == FROZEN_HIDDEN_SIZE, (
+        "models.torch_sequence_gru.FROZEN_HIDDEN_SIZE has diverged from the "
+        "canonical models.dataset.FROZEN_HIDDEN_SIZE; the sequence-GRU "
+        "baseline must re-export the shared width, not redefine it"
+    )
+    assert HIDDEN_SIZE == FROZEN_HIDDEN_SIZE, (
+        "models.torch_intervention_aware.HIDDEN_SIZE has diverged from the "
+        "canonical models.dataset.FROZEN_HIDDEN_SIZE; the two models must "
+        "share one hidden width or the Section 17 ablation contrast measures "
+        "a capacity difference instead of a representational one"
+    )
+
+    # The two models' constructor defaults are the same width, which is the
+    # property the ablation contrast actually depends on -- the constants
+    # agreeing would not help if a default were hard-coded past them.
+    from models.torch_intervention_aware import TorchInterventionAwareModel
+    from models.torch_sequence_gru import TorchSequenceGRU
+
+    sequence_default = (
+        inspect.signature(TorchSequenceGRU.__init__).parameters["hidden_size"].default
+    )
+    intervention_default = (
+        inspect.signature(TorchInterventionAwareModel.__init__)
+        .parameters["hidden_size"]
+        .default
+    )
+    assert sequence_default == intervention_default == 16

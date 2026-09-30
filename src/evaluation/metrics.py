@@ -71,7 +71,15 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from itertools import groupby
 
-from cohorts.sealed_reference import InternalReference
+from causal.baselines import CausalEstimate
+from cohorts.sealed_reference import InternalReference, compare_to_reference
+
+#: The `InternalReference.quantities` key naming the randomized 96-week
+#: risk difference (`design.md` Section 4.5). Selected *by name* rather than
+#: positionally so a reference carrying quantities on several scales cannot
+#: have the wrong one differenced against a risk-difference estimate
+#: (Requirements 14.3-14.4).
+RISK_DIFFERENCE_QUANTITY = "risk_difference"
 
 #: Learning-rate / iteration budget for the tiny 1-covariate logistic
 #: calibration fit below -- same fixed, non-frozen pattern used by the
@@ -554,7 +562,7 @@ def aurcc(
         return float("nan")
 
     area = 0.0
-    for (coverage_a, risk_a), (coverage_b, risk_b) in zip(curve, curve[1:]):
+    for (coverage_a, risk_a), (coverage_b, risk_b) in zip(curve, curve[1:], strict=False):
         area += (coverage_b - coverage_a) * (risk_a + risk_b) / 2.0
     return area
 
@@ -846,19 +854,39 @@ def risk_difference_error_vs_internal_reference(
     raises `TypeError` for anything else -- including a `PublishedReference`
     instance, or any other non-`InternalReference` object.
 
+    Scale selection (Requirements 14.3-14.4; `design.md` Section 2.6
+    "Tension 4"): a format-version-2 reference carries several quantities
+    on several scales, only one of which is comparable with a risk
+    difference. This function therefore selects the `"risk_difference"`
+    quantity *by name* and delegates to
+    `cohorts.sealed_reference.compare_to_reference`, which asserts the
+    selected quantity's `scale` equals the estimate's own
+    (`"risk_difference"`) and raises `ScaleMismatchError` otherwise -- so a
+    reference whose `"risk_difference"` slot somehow carried a log-hazard
+    ratio would be refused rather than silently differenced.
+
+    A version-1-shaped reference (empty `quantities`) keeps its original
+    behavior exactly: the error is taken against `reference.value`, whose
+    meaning `design.md` Section 4.5 deliberately preserves so existing
+    consumers are unaffected.
+
     Args:
         estimated_risk_difference: the model's estimated 96-week risk
             difference.
         reference: the unsealed `InternalReference` carrying the internal
-            randomized reference's risk-difference `value` (see
-            `cohorts.sealed_reference.InternalReference`).
+            randomized reference's risk difference -- as the
+            `"risk_difference"` entry of `quantities` (format version 2),
+            or as `value` (format version 1). See
+            `cohorts.sealed_reference.InternalReference`.
 
     Returns:
-        `abs(estimated_risk_difference - reference.value)`.
+        `abs(estimated_risk_difference - reference_risk_difference)`.
 
     Raises:
         TypeError: if `reference` is not an `InternalReference` instance
             (e.g. a `PublishedReference`, `None`, or a plain float).
+        ScaleMismatchError: if the reference's `"risk_difference"` quantity
+            is not on the `"risk_difference"` scale.
     """
     if not isinstance(reference, InternalReference):
         raise TypeError(
@@ -869,4 +897,15 @@ def risk_difference_error_vs_internal_reference(
             "error must never be computed against a published reference "
             "(decisions.md Section 18's reference-effect policy)."
         )
+
+    if RISK_DIFFERENCE_QUANTITY in reference.quantities:
+        estimate = CausalEstimate(
+            name="estimated_risk_difference",
+            estimate=estimated_risk_difference,
+            se=None,
+            is_primary=False,
+            scale="risk_difference",
+        )
+        return compare_to_reference(estimate, reference, RISK_DIFFERENCE_QUANTITY)
+
     return abs(estimated_risk_difference - reference.value)

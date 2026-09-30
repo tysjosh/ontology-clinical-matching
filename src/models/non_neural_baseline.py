@@ -100,7 +100,7 @@ class CoxBaseline:
         self._fitted: FittedCoxBaseline | None = None
         self._standardization = None
 
-    def fit(self, patients: Sequence[PatientRecord]) -> "CoxBaseline":
+    def fit(self, patients: Sequence[PatientRecord]) -> CoxBaseline:
         """Fit Cox PH on `patients`' composite endpoint.
 
         Reuses `causal.propensity._fit_standardization`/`_feature_vector`

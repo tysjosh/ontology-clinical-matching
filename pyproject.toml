@@ -5,31 +5,72 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "causal-witness-pwm"
 version = "0.1.0"
-description = "Causal Witness Patient World Model - ACTG175 critical path (NeurIPS 2026 WMHS submission)"
+description = "Causal Witness Patient World Model - ACTG175 critical path (ICLR 2027 main track submission)"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Proprietary" }
+# Base install stays torch-free (design.md Section 2.4, Requirements 5.1-5.2).
+# Every non-neural code path -- the six causal estimators, all three
+# witnesses, overlap diagnostics, negative controls, export scanning, the
+# sealed reference, and the whole existing test suite -- must import and run
+# with nothing but these two dependencies present. Torch belongs to the
+# `neural` extra below, never here.
 dependencies = [
     "pydantic==2.9.2",
     "PyYAML==6.0.2",
 ]
 
 [project.optional-dependencies]
+# Tensor stack for the production PyTorch layer (`src/models/dataset.py`,
+# `torch_sequence_gru.py`, `torch_intervention_aware.py`, `torch_training.py`,
+# and the deferred imports inside `models.variants.build_model`).
+#
+# torch is pinned at 2.5.1: the version the project environment targets, so a
+# fresh install reproduces the same tensor library (Requirement 5.2).
+#
+# numpy is pinned at 1.26.4, the final 1.x release. torch 2.5.1 declares no
+# numpy dependency of its own, so the choice is ours. 1.26.4 is compatible
+# with torch 2.5.1 regardless of which numpy headers the torch wheels were
+# built against: extension modules built against numpy 2.x headers remain
+# runtime-compatible with numpy 1.x, whereas the reverse does not hold and
+# produces the `_ARRAY_API not found` failure. 1.26.4 also covers both
+# deployment targets in `decisions.md` Section 25 (local Apple-silicon CPU,
+# remote A100 CUDA) and satisfies requires-python >= 3.11.
+neural = [
+    "torch==2.5.1",
+    "numpy==1.26.4",
+]
 dev = [
     "pytest==8.3.3",
     "pytest-cov==5.0.0",
     "hypothesis==6.115.5",
     "ruff==0.6.9",
     "black==24.10.0",
+    # `dev` is the full development environment, so it pulls the tensor stack
+    # in. A base (`pip install .`) or test-only install still gets neither.
+    "causal-witness-pwm[neural]",
 ]
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.pytest.ini_options]
+# `tests/neural/` is the collection root for torch-requiring tests
+# (design.md Section 2.4). It is a package under `tests`, so the single
+# `tests` entry already collects it.
+#
+# Do NOT write `testpaths = ["tests", "tests/neural"]`. pytest de-duplicates
+# overlapping arguments by keeping the narrower path, which silently drops
+# `tests` and reduces the whole suite to whatever `tests/neural` contains --
+# measured on pytest 8.3.3, the full suite collapsed to 0 collected tests
+# while the directory held no test module, and to 1 once it held one.
+# `tests/unit/test_dependency_manifest.py` guards against reintroducing it.
 testpaths = ["tests"]
 pythonpath = ["src"]
 addopts = "-ra"
+markers = [
+    "neural: requires the optional `neural` extra (torch). Collected under tests/neural/ and skipped via importorskip('torch') in a base, torch-free environment.",
+]
 
 [tool.ruff]
 line-length = 100

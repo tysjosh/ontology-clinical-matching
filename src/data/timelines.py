@@ -94,10 +94,16 @@ class UnrecognizedModalityError(Exception):
 
     def __init__(self, modality: str):
         self.modality = modality
+        known = sorted(
+            _STATIC_MODALITIES
+            | _OBSERVATION_MODALITIES
+            | _TREATMENT_MODALITIES
+            | _ENDPOINT_MODALITIES
+            | _CENSORING_MODALITIES
+        )
         super().__init__(
             f"Unrecognized event modality '{modality}': no timeline bucket is "
-            "defined for it. Expected one of: "
-            f"{sorted(_STATIC_MODALITIES | _OBSERVATION_MODALITIES | _TREATMENT_MODALITIES | _ENDPOINT_MODALITIES | _CENSORING_MODALITIES)}."
+            f"defined for it. Expected one of: {known}."
         )
 
 

@@ -63,10 +63,10 @@ class CausalWitness:
 
     @staticmethod
     def evaluate(
-        overlap_report: "OverlapReport",
+        overlap_report: OverlapReport,
         sensitivity_stable: bool,
-        negative_control_exposure_result: "NegativeControlResult",
-        negative_control_outcome_result: "NegativeControlResult",
+        negative_control_exposure_result: NegativeControlResult,
+        negative_control_outcome_result: NegativeControlResult,
     ) -> WitnessResult:
         """Classifies the causal witness as pass/fail/uncertain.
 

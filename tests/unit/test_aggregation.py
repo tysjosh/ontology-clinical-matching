@@ -54,7 +54,9 @@ def test_patient_level_estimate_constructs_with_model_estimate_kind():
 
 
 def _estimate(patient_id: str, y1_hat: float, y0_hat: float) -> PatientLevelEstimate:
-    return PatientLevelEstimate(patient_id=patient_id, y1_hat=y1_hat, y0_hat=y0_hat, kind="model_estimate")
+    return PatientLevelEstimate(
+        patient_id=patient_id, y1_hat=y1_hat, y0_hat=y0_hat, kind="model_estimate"
+    )
 
 
 def test_estimate_ate_matches_hand_computed_value():
@@ -146,7 +148,9 @@ def test_build_patient_level_estimate_extracts_event_hazard():
 def test_build_patient_level_estimate_ignores_tag_ordering():
     """y1_hat/y0_hat always come from branch_1_output/branch_0_output
     respectively, regardless of which one is tagged "factual"."""
-    branch_1_output = BranchOutput(event_hazard=0.7, next_cd4=1.0, next_cd8=1.0, tag="counterfactual")
+    branch_1_output = BranchOutput(
+        event_hazard=0.7, next_cd4=1.0, next_cd8=1.0, tag="counterfactual"
+    )
     branch_0_output = BranchOutput(event_hazard=0.2, next_cd4=1.0, next_cd8=1.0, tag="factual")
 
     estimate = build_patient_level_estimate("patient-7", branch_1_output, branch_0_output)

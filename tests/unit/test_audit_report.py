@@ -47,7 +47,10 @@ def overlap_report() -> OverlapReport:
             1: ArmPropensitySummary(n=118, minimum=0.11, maximum=0.88, mean=0.51, median=0.5),
         },
         common_support=CommonSupportSummary(
-            primary_count=230, primary_fraction=0.96, sensitivity_count=235, sensitivity_fraction=0.99
+            primary_count=230,
+            primary_fraction=0.96,
+            sensitivity_count=235,
+            sensitivity_fraction=0.99,
         ),
         extreme_weight_count=8,
         extreme_weight_fraction=0.03,
@@ -117,7 +120,13 @@ def provenance() -> dict:
 
 @pytest.fixture
 def report(
-    target_trial_spec, overlap_report, bootstrap_ci, witness_results, abstentions, violations, provenance
+    target_trial_spec,
+    overlap_report,
+    bootstrap_ci,
+    witness_results,
+    abstentions,
+    violations,
+    provenance,
 ) -> AuditReport:
     return build_audit_report(
         protocol=target_trial_spec,
@@ -163,7 +172,9 @@ def test_audit_report_contains_witness_outcomes(report):
 def test_audit_report_contains_abstention_reasons(report):
     # Only the unsupported SupportDecision's reasons should be surfaced.
     assert report.abstention_reasons
-    assert any("propensity_in_common_support: fail" in reason for reason in report.abstention_reasons)
+    assert any(
+        "propensity_in_common_support: fail" in reason for reason in report.abstention_reasons
+    )
 
 
 def test_audit_report_contains_violations(report):

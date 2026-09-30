@@ -24,10 +24,10 @@ schemas here once implemented.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, ValidationError, field_validator, model_validator
 
 
 class ConfigError(Exception):
@@ -104,16 +104,135 @@ class TargetTrialConfig(BaseModel):
     assumptions: dict[str, Any]
 
 
+class VariantOverrides(BaseModel):
+    """The analytic knobs the eight frozen sensitivity variants turn.
+
+    Every field defaults to the primary/frozen setting of
+    `.kiro/specs/causal-witness-pwm/decisions.md`, so a config that names
+    none of them describes the primary analysis exactly. The alternatives
+    are closed `Literal` sets rather than free strings: a sensitivity
+    variant that misspells its own knob must fail loudly at config-load
+    time, not silently execute the primary analysis under a variant's name.
+
+    `extra="forbid"` and `frozen=True` are both load-bearing. `forbid`
+    keeps a typo'd override from being absorbed as an untyped extra;
+    `frozen` keeps a knob from being mutated after the config was hashed
+    into an `experiment_id`, which would make the identifier stop
+    describing the run.
+
+    Because these fields have defaults and `ResolvedConfig.canonical_dict()`
+    serializes defaults, every config -- textually unchanged -- now hashes
+    with `variant: {all-primary values}` present. That one-time
+    re-identification of every prior `experiment_id` is deliberate and is
+    recorded as a `decisions.md` Section 26 amendment (neural-experiment-pipeline
+    Requirement 9.9, 18.1; `design.md` Section 2.6 tension 3).
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    propensity_model: Literal["logistic", "boosted"] = "logistic"
+    weight_clipping: Literal["primary_1_99", "narrow_0p5_99p5", "wide_5_95"] = "primary_1_99"
+    support_thresholds: Literal["primary_0.10_0.90", "strict_0.20_0.80"] = "primary_0.10_0.90"
+    missingness_stress: Literal["none", "increased"] = "none"
+    landmark_masking: Literal["none", "week_20_removed"] = "none"
+    comparator_orientation: Literal["primary", "reversed"] = "primary"
+    endpoint_horizon_weeks: float = 96.0
+    selection_severity: Literal["primary", "stronger"] = "primary"
+
+
+class ExperimentVariantSpec(BaseModel):
+    """Config-side mirror of `models.variants.ExperimentVariant`.
+
+    Direction of the mirror: **this model is the source, the dataclass is
+    the mirror.** `ExperimentVariantSpec` exists here so a model variant can
+    be *named in a config file* and therefore enter
+    `ResolvedConfig.canonical_dict()` and the `experiment_id` hash
+    (neural-experiment-pipeline Requirement 6.6, 9.9). The frozen
+    `ExperimentVariant` dataclass in `src/models/variants.py` does not exist
+    yet -- it arrives with the model factory -- and it is required to carry
+    these field names, these types, and these allowed value sets;
+    `design.md` Section 4.2 fixes them for both.
+    Whoever writes `ExperimentVariant` should mirror this declaration, not
+    re-choose it; a divergence between the two is a defect in the dataclass.
+
+    Scope note: field-level validation (allowed value sets, non-empty name,
+    witness subset) lives here. The two *structurally impossible*
+    combinations of `design.md` Section 3.5 -- `sequence_gru` with
+    `explicit_channel`, and `cox` with an active protocol channel -- are
+    cross-field constraints enforced by `ExperimentVariant.__post_init__`,
+    which is the single construction point the model factory goes through.
+
+    `enabled_witnesses` is a sorted, de-duplicated tuple rather than the
+    dataclass's `frozenset`, because it has to serialize deterministically:
+    `model_dump(mode="json")` of a `frozenset` has no defined element
+    order, which would make one config hash to different `experiment_id`
+    values across processes.
+    """
+
+    # `protected_namespaces=()` only silences pydantic's warning about the
+    # `model_`-prefixed field names; `model_family` is the field name
+    # `design.md` Section 4.2 fixes and is not renamed to accommodate a
+    # library convention.
+    model_config = ConfigDict(extra="forbid", frozen=True, protected_namespaces=())
+
+    name: str
+    model_family: Literal["cox", "sequence_gru", "intervention_aware"]
+    treatment_representation: Literal[
+        "absent", "ordinary_feature", "explicit_channel", "placebo_channel"
+    ]
+    protocol_channel: Literal["active", "zeroed"]
+    overlap_gate: bool
+    uncertainty_gate: bool
+    clinical_constraints: bool
+    enabled_witnesses: tuple[Literal["temporal", "causal", "clinical"], ...]
+    causal_adjustment: bool
+    balance_penalty_enabled: bool
+
+    @field_validator("name")
+    @classmethod
+    def _name_is_non_empty(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("name must be a non-empty string")
+        return value
+
+    @field_validator("enabled_witnesses")
+    @classmethod
+    def _witnesses_are_sorted_and_unique(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        """Normalize to sorted-unique so the serialized form is canonical.
+
+        A config listing `["causal", "temporal"]` and one listing
+        `["temporal", "causal", "temporal"]` describe the same variant and
+        must hash to the same `experiment_id`.
+        """
+        return tuple(sorted(set(value)))
+
+
 class ExperimentConfig(BaseModel):
     """Experiment-level configuration: identity, seed, and run-policy fields."""
 
-    model_config = ConfigDict(extra="forbid")
+    # See `ExperimentVariantSpec` for why `protected_namespaces` is cleared:
+    # `model_variant` is the field name `design.md` Section 2.6 fixes.
+    model_config = ConfigDict(extra="forbid", protected_namespaces=())
 
     experiment_name: str
     seed: int
     exploratory: bool = False
     witness_policy: str = "ALL_REQUIRED"
     tags: list[str] = []
+    #: Analytic knobs the frozen sensitivity variants turn; all-primary by
+    #: default (`design.md` Section 2.6 tension 3).
+    variant: VariantOverrides = VariantOverrides()
+    #: The model variant this run builds, when one is named. `None` means
+    #: no neural model variant was selected -- which is itself a hashed
+    #: fact about the run, not an absence.
+    model_variant: ExperimentVariantSpec | None = None
+    #: Bootstrap replicate count for both negative controls. This was the
+    #: only input covered by the second, now-deleted identity scheme in
+    #: `scripts/run_causal_analysis.py` that did not already live inside
+    #: `ResolvedConfig`; absorbed here so
+    #: `infra.registry.compute_experiment_id` is the single identity
+    #: function (`design.md` Section 2.6 tension 6).
+    negative_control_n_bootstrap: int = 1000
 
     @model_validator(mode="after")
     def _witness_policy_is_valid_and_gated(self) -> ExperimentConfig:
@@ -146,6 +265,13 @@ class ResolvedConfig(BaseModel):
 
         Used by `src/infra/registry.py` to compute
         `experiment_id = sha256(canonical_json(resolved_config))[:16]`.
+
+        Defaults are serialized, not omitted. That is what makes two runs
+        differing only in a `variant` override, a `model_variant`, or
+        `negative_control_n_bootstrap` get different `experiment_id`
+        values; it is also why adding those fields re-identified every
+        previously computed `experiment_id` (a one-time, documented break,
+        recorded as a `decisions.md` Section 26 amendment).
         """
         return self.model_dump(mode="json")
 

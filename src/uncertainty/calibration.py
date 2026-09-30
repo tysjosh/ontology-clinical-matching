@@ -136,9 +136,11 @@ class CalibrationResult:
 
 def _brier_score(predictions: Sequence[float], labels: Sequence[bool]) -> float:
     observed = [1.0 if label else 0.0 for label in labels]
-    return sum(
-        (prediction - outcome) ** 2 for prediction, outcome in zip(predictions, observed, strict=True)
-    ) / len(predictions)
+    squared_errors = (
+        (prediction - outcome) ** 2
+        for prediction, outcome in zip(predictions, observed, strict=True)
+    )
+    return sum(squared_errors) / len(predictions)
 
 
 def _reliability_diagram(
@@ -162,7 +164,9 @@ def _reliability_diagram(
         bin_observed[bin_index].append(1.0 if label else 0.0)
 
     diagram: list[tuple[float, float, int]] = []
-    for preds, observed in zip(bin_predictions, bin_observed):
+    # Both accumulators are built as `[[] for _ in range(n_bins)]`, so their
+    # lengths always agree; `strict=True` asserts that rather than assuming it.
+    for preds, observed in zip(bin_predictions, bin_observed, strict=True):
         if not preds:
             continue
         count = len(preds)

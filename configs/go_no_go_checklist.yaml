@@ -6,10 +6,17 @@
 #
 # Scoping note: this file's items are booleans that some *other* process
 # (a human reviewer ticking a box, or an earlier automated pipeline stage
-# writing its own result here) has already determined. `check_go_no_go.py`
-# does not re-derive any of these checks itself -- it only gates on
-# whether they have all been marked complete. See
-# `scripts/check_go_no_go.py`'s module docstring for the full rationale.
+# writing its own result here) has already determined.
+#
+# Attestations are checked against evidence (task 2.5). Nine of the twelve
+# items have a machine verifier in `src/infra/checklist_verifiers.py`;
+# `check_go_no_go.py` reports every verifier's `verified`/`failed`/
+# `unverifiable` result next to the attested boolean below and refuses to
+# mint when an item is attested `true` while its verifier returns `failed`.
+# The three remaining items (`estimand_alignment_checked`,
+# `reference_inaccessible_to_model_selection`, `thresholds_frozen`) are
+# claims about human process ordering that leave no artifact; they stay
+# permanently `unverifiable` by machine and human-set here, on purpose.
 #
 # Every item defaults to `false` (unresolved). Flip an item to `true` only
 # once the corresponding real-world check has actually been performed and

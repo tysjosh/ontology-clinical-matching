@@ -12,10 +12,21 @@ Confirms the gating logic in isolation:
 - a checklist with any item unmet causes `main()` to exit non-zero and
   never mint a token.
 
+Task 2.5 added evidence to the gate (`src/infra/checklist_verifiers.py`), so
+this file also covers the attestation-vs-evidence rules:
+
+- an item attested `true` whose verifier returns `failed` blocks minting and
+  is named in the refusal (an attestation may not contradict evidence);
+- an item whose verifier returns `unverifiable` does not block (absence of
+  evidence is not evidence against);
+- the report prints every item's attested boolean beside its verifier
+  outcome.
+
 `scripts/` is not an installed package, so this test adds it to `sys.path`
 directly, mirroring `tests/unit/test_scan_exports.py`.
 
-**Validates: Correctness Property 1; decisions.md Section 21**
+**Validates: Correctness Property 1; Requirements 13.13, 18.4; decisions.md
+Section 21**
 """
 
 from __future__ import annotations
@@ -35,7 +46,8 @@ if str(SCRIPTS_DIR) not in sys.path:
 
 import check_go_no_go  # noqa: E402  (import after sys.path manipulation, by design)
 
-from cohorts.sealed_reference import LockedEvaluationToken  # noqa: E402
+from cohorts.sealed_reference import BOUND_TOKEN_FIELDS  # noqa: E402
+from tests.token_fixtures import synthetic_token  # noqa: E402
 
 
 def _all_true() -> dict[str, bool]:
@@ -82,9 +94,7 @@ def test_load_checklist_round_trips_the_template_config():
     and, unmodified, reports every item unmet (its documented default
     state).
     """
-    checklist = check_go_no_go.load_checklist(
-        REPO_ROOT / "configs" / "go_no_go_checklist.yaml"
-    )
+    checklist = check_go_no_go.load_checklist(REPO_ROOT / "configs" / "go_no_go_checklist.yaml")
 
     assert set(checklist) == set(check_go_no_go.CHECKLIST_ITEMS)
     all_passed, unmet = check_go_no_go.check_go_no_go(checklist)
@@ -142,12 +152,128 @@ def test_main_mints_and_writes_token_when_all_items_pass(tmp_path, capsys):
     assert "issued_at" in token_data
 
 
+def test_token_artifact_records_every_bound_field_but_they_are_not_wired_yet(tmp_path):
+    """The artifact serializes all nine bindings (task 21's runner recomputes
+    them per Requirement 13.5), and the seven artifact bindings are still the
+    loudly-labeled placeholder task 20 replaces.
+
+    Asserting the placeholder explicitly is deliberate: it makes "these are
+    not real hashes yet" a checked fact rather than a comment, and this test
+    is the one task 20 must change when it wires the real values in.
+    """
+    checklist_path = _write_checklist(tmp_path, _all_true())
+    token_output = tmp_path / "token.json"
+
+    assert (
+        check_go_no_go.main(
+            ["--checklist", str(checklist_path), "--token-output", str(token_output)]
+        )
+        == 0
+    )
+
+    token_data = json.loads(token_output.read_text())
+    assert set(token_data) == set(BOUND_TOKEN_FIELDS)
+
+    placeholder = check_go_no_go.UNWIRED_BINDING_PLACEHOLDER
+    for name in (
+        "resolved_config_hash",
+        "dataset_checksum",
+        "split_hash",
+        "git_commit",
+        "statistical_plan_version",
+        "evaluation_id",
+    ):
+        assert token_data[name] == placeholder
+    assert token_data["checkpoint_hashes"] == [[placeholder, placeholder]]
+
+
 def test_main_without_token_output_still_succeeds_when_all_pass(tmp_path):
     checklist_path = _write_checklist(tmp_path, _all_true())
 
     exit_code = check_go_no_go.main(["--checklist", str(checklist_path)])
 
     assert exit_code == 0
+
+
+def _target_trial_copy_permitting_post_hoc_exclusion(tmp_path: Path) -> Path:
+    """Write a target-trial config that contradicts `target_population_defined`.
+
+    `decisions.md` Section 4 forbids post hoc outcome-based exclusion, and the
+    real config encodes that as
+    `population.post_hoc_outcome_exclusion_permitted: false`. Flipping it to
+    `true` in a copy makes that item's verifier return `failed` against real
+    evidence -- no stubbing involved.
+    """
+    from infra.checklist_verifiers import VerificationContext
+
+    raw = yaml.safe_load(VerificationContext().target_trial_path.read_text(encoding="utf-8"))
+    raw["population"]["post_hoc_outcome_exclusion_permitted"] = True
+    destination = tmp_path / "contradicting_target_trial.yaml"
+    destination.write_text(yaml.safe_dump(raw), encoding="utf-8")
+    return destination
+
+
+def test_main_reports_each_items_attestation_beside_its_verifier_outcome(tmp_path, capsys):
+    checklist_path = _write_checklist(tmp_path, _all_true())
+
+    check_go_no_go.main(["--checklist", str(checklist_path)])
+
+    captured = capsys.readouterr()
+    for name in check_go_no_go.CHECKLIST_ITEMS:
+        assert name in captured.out
+    assert "attested=true" in captured.out
+    assert "verifier=verified" in captured.out
+    # The three process attestations report their absence of evidence.
+    assert captured.out.count("verifier=unverifiable") == 3
+
+
+def test_main_refuses_to_mint_when_an_attestation_contradicts_evidence(tmp_path, capsys):
+    """Attested `true`, verifier `failed` -> no token, item named, exit non-zero."""
+    checklist_path = _write_checklist(tmp_path, _all_true())
+    token_output = tmp_path / "token.json"
+
+    exit_code = check_go_no_go.main(
+        [
+            "--checklist",
+            str(checklist_path),
+            "--token-output",
+            str(token_output),
+            "--target-trial-path",
+            str(_target_trial_copy_permitting_post_hoc_exclusion(tmp_path)),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code != 0
+    assert not token_output.exists()
+    assert "target_population_defined" in captured.err
+    assert "attested true but its verifier returned failed" in captured.err
+    assert "post_hoc_outcome_exclusion_permitted" in captured.err
+
+
+def test_main_still_mints_when_evidence_is_merely_unverifiable(tmp_path):
+    """Absence of evidence is not evidence against.
+
+    With `decisions.md` unavailable, the five document-checkable verifiers
+    return `unverifiable` rather than `failed`, so the attestations remain the
+    only signal and the gate mints as before.
+    """
+    checklist_path = _write_checklist(tmp_path, _all_true())
+    token_output = tmp_path / "token.json"
+
+    exit_code = check_go_no_go.main(
+        [
+            "--checklist",
+            str(checklist_path),
+            "--token-output",
+            str(token_output),
+            "--decisions-path",
+            str(tmp_path / "absent_decisions.md"),
+        ]
+    )
+
+    assert exit_code == 0
+    assert token_output.exists()
 
 
 def test_minted_token_unlocks_a_sealed_reference(tmp_path):
@@ -167,7 +293,7 @@ def test_minted_token_unlocks_a_sealed_reference(tmp_path):
     checklist_path = _write_checklist(tmp_path, _all_true())
     check_go_no_go.main(["--checklist", str(checklist_path)])
 
-    token = LockedEvaluationToken._mint(issued_by="scripts/check_go_no_go.py")
+    token = synthetic_token(issued_by="scripts/check_go_no_go.py")
 
     event = ClinicalEvent(
         patient_id="p1",

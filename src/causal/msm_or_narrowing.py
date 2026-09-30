@@ -107,8 +107,9 @@ def assert_baseline_treatment_estimand_valid(cohort: RandomizedCohort) -> None:
     ordinary treatment switch, `decisions.md` Section 3-4) is NOT
     inspected and does NOT cause this function to raise -- ACTG175's ITT
     strategy explicitly tolerates such switches
-    (`configs/target_trials/main.yaml`'s
-    `treatment_switching_handling: "recorded_and_described_descriptively_ignored_in_primary_itt_analysis"`).
+    (`configs/target_trials/main.yaml`'s `treatment_switching_handling`, whose
+    value is
+    `recorded_and_described_descriptively_ignored_in_primary_itt_analysis`).
 
     Raises:
         TimeVaryingTreatmentDetectedError: if any patient's `treatment_arm`

@@ -25,7 +25,12 @@ and runs everything task 18's scope deferred:
 5. Evaluate the three witnesses (temporal, causal, clinical) and aggregate
    them under the frozen `ALL_REQUIRED` policy
    (`witnesses.aggregation.aggregate`).
-6. Register the experiment (`infra.registry.ExperimentRegistry`), write a
+6. Register the experiment through `infra.registry.ExperimentRegistry`,
+   which is the sole owner of run identity: it computes
+   `compute_experiment_id(resolved_config)` and is the only place a
+   duplicate run is refused. This script composes that `ResolvedConfig`
+   from the three frozen YAML sources (see `_resolve_config_for_run`) and
+   mints no identifier of its own. Then write a
    privacy-scanned `manifest.json` (`infra.manifest.ManifestWriter`), the
    cohort-flow table (`cohorts.cohort_flow.build_cohort_flow_table`), and
    persist the sealed internal randomized reference to
@@ -68,7 +73,6 @@ Usage::
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import sys
 from pathlib import Path
@@ -89,7 +93,8 @@ from cohorts.pipeline import run_observationalization_pipeline
 from cohorts.sealed_reference import unadjusted_cox_reference_estimator
 from data.loaders.actg175 import Actg175DataNotFoundError, load_actg175
 from data.loaders.actg175_adapter import raw_tables_to_pipeline_inputs
-from infra.manifest import ManifestPrivacyError, ManifestWriter
+from infra.config import ResolvedConfig, load_config
+from infra.manifest import ManifestPrivacyError, ManifestWriter, resolve_git_provenance
 from infra.registry import DuplicateExperimentError, ExperimentRegistry
 from infra.seeding import derive_seed
 from protocols.consistency_checker import PatientProtocolRecord
@@ -106,6 +111,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 DEFAULT_REAL_DATA_PATH = REPO_ROOT / "data" / "raw" / "actg175_v3_2"
 DEFAULT_TRIAL_CONFIG = REPO_ROOT / "configs" / "target_trials" / "main.yaml"
+DEFAULT_DATASET_CONFIG = REPO_ROOT / "configs" / "datasets" / "actg175_v3_2.yaml"
+DEFAULT_EXPERIMENT_CONFIG = REPO_ROOT / "configs" / "experiments" / "real_data_primary.yaml"
 DEFAULT_RESULTS_ROOT = REPO_ROOT / "results"
 
 #: Number of cross-fitting folds for the primary propensity model
@@ -119,49 +126,55 @@ PROPENSITY_N_FOLDS = 5
 #: invocation, not only in a dedicated test.
 NEGATIVE_CONTROL_N_BOOTSTRAP = 200
 
-#: Length, in hex characters, of the truncated content-hash experiment ID
-#: (matches `infra.registry`'s `_EXPERIMENT_ID_LENGTH` convention).
-_EXPERIMENT_ID_LENGTH = 16
 
-
-def _compute_content_experiment_id(
-    dataset_checksum: str,
-    trial_spec_version: str,
+def _resolve_config_for_run(
+    dataset_config_path: Path,
+    trial_config_path: Path,
+    experiment_config_path: Path,
     master_seed: int,
     negative_control_n_bootstrap: int,
-) -> str:
-    """A real, collision-resistant experiment ID derived from every input
-    that actually changes this run's output -- not just `master_seed`.
+) -> ResolvedConfig:
+    """Compose the `ResolvedConfig` this run's identity is computed from.
 
-    Unlike this script's earlier `f"causal_analysis_{master_seed}"` (which
-    collided across any two runs sharing a seed even if the underlying
-    data, trial spec, or bootstrap configuration differed -- silently
-    overwriting the first run's artifacts and appending a second,
-    indistinguishable registry record), this hashes every input that
-    changes the run's actual output: the real raw-data checksum, the
-    locked trial-spec version, the master seed, and the negative-control
-    bootstrap count. Two runs that hash identically are, by construction,
-    runs that would have produced identical results anyway -- this is not
-    `infra.registry.compute_experiment_id`'s full
-    `sha256(canonical_json(resolved_config))` over a real `ResolvedConfig`
-    (no such config is composed at this call site; see
-    `scripts/run_ablations.py`'s `_compute_harness_experiment_id` for the
-    same documented simplification), but it closes the specific collision
-    risk a seed-only identifier has: two runs against different data (a
-    changed/re-ingested dataset) or a different trial-spec version, that
-    happen to share a `master_seed`, now get different, non-colliding IDs.
+    This script used to mint its own identifier from a hand-rolled content
+    hash over `(dataset_checksum, trial_spec_version, master_seed,
+    negative_control_n_bootstrap)`, which made two identity schemes exist
+    at once. `infra.registry.compute_experiment_id` is now the only one
+    (`design.md` Section 2.6 tension 6), and every input the deleted
+    function covered is hashed through this resolved config instead:
 
-    Returns:
-        `sha256(...)`'s first `_EXPERIMENT_ID_LENGTH` hex characters.
+    - **dataset checksum** -- `resolved.dataset.checksum_sha256`, from the
+      frozen dataset contract. This is the same value as the loaded
+      tables' `checksum_sha256`: `data.loaders.actg175.load_actg175`
+      verifies the computed checksum against this contract and raises
+      `ChecksumMismatchError` on any disagreement, so a run whose real
+      data differs from the contract does not reach identity computation
+      at all.
+    - **trial-spec version** -- `resolved.target_trial.version`, from the
+      same target-trial YAML this script validates into a
+      `protocols.schema.TargetTrialSpec` for execution.
+    - **master seed** -- `resolved.experiment.seed`, overridden from the
+      CLI/caller argument so the argument, not the file, decides the run.
+    - **negative-control bootstrap count** --
+      `resolved.experiment.negative_control_n_bootstrap`, the field added
+      for exactly this purpose.
+
+    The two overrides are applied to the loaded `ExperimentConfig` rather
+    than read from the file alone, so `--master-seed` and
+    `--negative-control-n-bootstrap` remain the run's real inputs *and*
+    are inside the hash.
     """
-    canonical = (
-        f"dataset_checksum={dataset_checksum}|"
-        f"trial_spec_version={trial_spec_version}|"
-        f"master_seed={master_seed}|"
-        f"negative_control_n_bootstrap={negative_control_n_bootstrap}"
+    resolved = load_config(dataset_config_path, trial_config_path, experiment_config_path)
+    return ResolvedConfig(
+        dataset=resolved.dataset,
+        target_trial=resolved.target_trial,
+        experiment=resolved.experiment.model_copy(
+            update={
+                "seed": master_seed,
+                "negative_control_n_bootstrap": negative_control_n_bootstrap,
+            }
+        ),
     )
-    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-    return f"causal_analysis_{digest[:_EXPERIMENT_ID_LENGTH]}"
 
 
 def _adapt_to_eligibility_timeline(patient: PatientRecord) -> EligibilityPatientTimeline:
@@ -257,6 +270,8 @@ def run_causal_analysis(
     results_root: Path,
     master_seed: int,
     negative_control_n_bootstrap: int = NEGATIVE_CONTROL_N_BOOTSTRAP,
+    dataset_config_path: Path = DEFAULT_DATASET_CONFIG,
+    experiment_config_path: Path = DEFAULT_EXPERIMENT_CONFIG,
 ) -> dict[str, Any]:
     """Run the full causal-analysis sequence and persist real artifacts.
 
@@ -265,6 +280,12 @@ def run_causal_analysis(
             negative controls. Defaults to `NEGATIVE_CONTROL_N_BOOTSTRAP`
             (200); tests may pass a smaller value to keep runtime down,
             since each negative control refits a model once per replicate.
+        dataset_config_path: the frozen dataset contract, composed into
+            this run's `ResolvedConfig` (see `_resolve_config_for_run`).
+        experiment_config_path: the experiment config composed into this
+            run's `ResolvedConfig`; its `seed` and
+            `negative_control_n_bootstrap` are overridden by the two
+            arguments above.
 
     Returns a summary dict (also what gets printed/logged); raises on any
     failure rather than swallowing it, since this is a library function a
@@ -272,6 +293,14 @@ def run_causal_analysis(
     `run_all_ablations` convention) -- `main()` below is the only place
     that catches exceptions and converts them to a CLI exit code.
     """
+    resolved_config = _resolve_config_for_run(
+        dataset_config_path,
+        trial_config_path,
+        experiment_config_path,
+        master_seed,
+        negative_control_n_bootstrap,
+    )
+
     with trial_config_path.open("r", encoding="utf-8") as handle:
         raw = yaml.safe_load(handle)
     spec = TargetTrialSpec.model_validate(raw)
@@ -341,21 +370,28 @@ def run_causal_analysis(
     witness_results = [temporal_result, causal_result, clinical_result]
     aggregate_decision: AggregateDecision = aggregate(witness_results, WitnessPolicy.ALL_REQUIRED)
 
-    # 6. Persist real experiment artifacts.
-    experiment_id = _compute_content_experiment_id(
-        dataset_checksum=tables.checksum_sha256,
-        trial_spec_version=spec.version,
-        master_seed=master_seed,
-        negative_control_n_bootstrap=negative_control_n_bootstrap,
+    # 6. Register the experiment and persist real artifacts.
+    #
+    # `ExperimentRegistry` owns both halves of run identity: it computes
+    # `compute_experiment_id(resolved_config)` -- the single identity
+    # function -- and it is the single place that refuses a duplicate,
+    # raising `DuplicateExperimentError` when the computed id already has a
+    # non-empty results directory. This script has no identity scheme and
+    # no duplicate check of its own (`design.md` Section 2.6 tension 6).
+    # Registration happens before any artifact is written, so a refused
+    # duplicate leaves the prior run's directory untouched.
+    registry = ExperimentRegistry(
+        registry_path=results_root / "registry.jsonl", results_root=results_root
     )
+    provenance = resolve_git_provenance(REPO_ROOT)
+    experiment_id = registry.register(
+        resolved_config,
+        git_commit=provenance.commit,
+        dirty=provenance.dirty,
+        results_root=results_root,
+    )
+
     experiment_dir = results_root / experiment_id
-    if experiment_dir.exists() and any(experiment_dir.iterdir()):
-        raise DuplicateExperimentError(
-            f"experiment_id {experiment_id!r} already has a non-empty results "
-            f"directory at {experiment_dir}; refusing to overwrite a prior "
-            "run's artifacts. Use a different master_seed, or remove that "
-            "directory first if this rerun is intentional."
-        )
     experiment_dir.mkdir(parents=True, exist_ok=True)
 
     cohort_flow = build_cohort_flow_table(timelines, treatment_arms, spec)
@@ -390,6 +426,9 @@ def run_causal_analysis(
     )
     manifest.set_outcome_definition({"type": spec.outcome.type})
     manifest.set_model_config({"stage": "causal_analysis", "master_seed": master_seed})
+    # Bind this run's result directory to the commit the run executed from
+    # (Requirement 15.4). The commit itself is resolved inside `build()`.
+    manifest.add_result_directory(str(experiment_dir))
     manifest.set_metrics(
         {
             "causal_baselines": {
@@ -412,28 +451,6 @@ def run_causal_analysis(
         manifest.write(manifest_path)
     except ManifestPrivacyError as exc:
         raise RuntimeError(f"manifest privacy scan blocked the write: {exc}") from exc
-
-    registry = ExperimentRegistry(
-        registry_path=results_root / "registry.jsonl", results_root=results_root
-    )
-    # This script computes its own simplified experiment_id (see above) --
-    # not `infra.registry.compute_experiment_id`'s full resolved-config
-    # hash, since no `ResolvedConfig` exists at this call site (mirrors
-    # `scripts/run_ablations.py`'s documented simplification). Register
-    # directly via a manual append rather than `ExperimentRegistry.register()`
-    # (which requires a `ResolvedConfig`), to avoid fabricating one.
-    registry.registry_path.parent.mkdir(parents=True, exist_ok=True)
-    registry_entry = {
-        "experiment_id": experiment_id,
-        "dataset_version": "3.2",
-        "master_seed": master_seed,
-        "stage": "causal_analysis",
-        "witness_policy": "ALL_REQUIRED",
-        "aggregate_decision_passed": aggregate_decision.passed,
-    }
-    with registry.registry_path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(registry_entry, sort_keys=True))
-        handle.write("\n")
 
     temporal_violation_count = (
         temporal_result.evidence["baseline_precedes_treatment_and_no_future_leakage"][
@@ -475,6 +492,27 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--real-data-path", type=Path, default=DEFAULT_REAL_DATA_PATH)
     parser.add_argument("--trial-config", type=Path, default=DEFAULT_TRIAL_CONFIG)
+    parser.add_argument(
+        "--dataset-config",
+        type=Path,
+        default=DEFAULT_DATASET_CONFIG,
+        help=(
+            "Path to the frozen dataset-contract YAML composed into this run's "
+            "ResolvedConfig, which is what the experiment_id is hashed from "
+            f"(default: {DEFAULT_DATASET_CONFIG.name})."
+        ),
+    )
+    parser.add_argument(
+        "--experiment-config",
+        type=Path,
+        default=DEFAULT_EXPERIMENT_CONFIG,
+        help=(
+            "Path to the experiment YAML composed into this run's ResolvedConfig; "
+            "its seed and negative_control_n_bootstrap are overridden by "
+            "--master-seed and --negative-control-n-bootstrap "
+            f"(default: {DEFAULT_EXPERIMENT_CONFIG.name})."
+        ),
+    )
     parser.add_argument("--results-root", type=Path, default=DEFAULT_RESULTS_ROOT)
     parser.add_argument("--master-seed", type=int, default=20240101)
     parser.add_argument(
@@ -500,6 +538,8 @@ def main(argv: list[str] | None = None) -> int:
             args.results_root,
             args.master_seed,
             negative_control_n_bootstrap=args.negative_control_n_bootstrap,
+            dataset_config_path=args.dataset_config,
+            experiment_config_path=args.experiment_config,
         )
     except Actg175DataNotFoundError as exc:
         print(f"run_causal_analysis.py failed: real ACTG175 data not found: {exc}", file=sys.stderr)

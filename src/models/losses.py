@@ -263,8 +263,14 @@ def load_lambda_grid(path: Path | str = DEFAULT_LAMBDA_GRID_PATH) -> list[tuple[
 # ---------------------------------------------------------------------------
 
 
+#: One lambda combination's VALIDATION-split scoring result:
+#: `(risk_scores, event_times, event_indicators)`, the triple
+#: `evaluation.metrics.concordance_index` consumes.
+ValidationScoringTriple = tuple[Sequence[float], Sequence[float], Sequence[bool]]
+
+
 def select_lambda_by_validation_concordance(
-    candidate_results: dict[tuple[float, float], tuple[Sequence[float], Sequence[float], Sequence[bool]]],
+    candidate_results: dict[tuple[float, float], ValidationScoringTriple],
 ) -> tuple[float, float]:
     """Select the `(lambda_state, lambda_balance)` combination with the
     highest VALIDATION-split composite-endpoint concordance.

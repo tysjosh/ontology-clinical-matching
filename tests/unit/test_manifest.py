@@ -1,13 +1,23 @@
 """Unit tests for `src/infra/manifest.py`.
 
-**Validates: Requirements 1.8, 1.9, 1.10, 1.11, 2.2, 2.3, 2.4, 2.7, 2.8**
+**Validates: Requirements 1.8, 1.9, 1.10, 1.11, 2.2, 2.3, 2.4, 2.7, 2.8, 5.7, 15.2, 15.4, 15.5**
 """
 
 import json
 
 import pytest
 
-from infra.manifest import ManifestPrivacyError, ManifestWriter, PrivacyScanner
+from infra.manifest import (
+    DEVICE_UNSPECIFIED,
+    GIT_COMMIT_UNAVAILABLE,
+    GIT_STATE_CLEAN,
+    GIT_STATE_DIRTY,
+    GitProvenance,
+    ManifestPrivacyError,
+    ManifestWriter,
+    PrivacyScanner,
+    resolve_git_provenance,
+)
 from infra.nondeterminism import mark_nondeterministic, reset_registry
 
 
@@ -28,6 +38,10 @@ def _build_synthetic_writer(tmp_path, allowed_path_prefixes=()):
         experiment_id="abc123deadbeef00",
         stage="cohort_construction",
         allowed_path_prefixes=allowed_path_prefixes,
+        # Stubbed by default so no test in this module depends on the state of
+        # the real working tree, and so no test spawns a `git` subprocess it
+        # does not need. The git-provenance tests below override this.
+        git_provenance_resolver=lambda: GitProvenance(commit="0" * 40),
     )
     writer.add_input_hash("actg175_raw", "e" * 64)
     writer.add_input_hash("target_trial_spec", "f" * 64)
@@ -224,3 +238,265 @@ class TestManifestWriterPrivacyBlocking:
         writer.write(target)
 
         assert target.exists()
+
+
+class TestGitProvenanceRecording:
+    """Git provenance is recorded on every manifest write.
+
+    **Validates: Requirements 15.2, 15.4, 15.5, 5.7**
+
+    Every case below injects a stubbed resolver, so none of these tests
+    depends on -- or can be perturbed by -- the state of the real working
+    tree.
+    """
+
+    @staticmethod
+    def _stub(provenance):
+        def resolver():
+            return provenance
+
+        return resolver
+
+    def test_clean_tree_records_commit_and_clean_state(self, tmp_path):
+        writer = _build_synthetic_writer(tmp_path)
+        writer.git_provenance_resolver = self._stub(GitProvenance(commit="d43bd1d" + "a" * 33))
+
+        provenance = writer.build()["git_provenance"]
+
+        assert provenance["state"] == GIT_STATE_CLEAN
+        assert provenance["commit"] == "d43bd1d" + "a" * 33
+        assert provenance["dirty"] is False
+        assert provenance["uncommitted_paths"] == []
+        assert provenance["unavailable_reason"] is None
+
+    def test_dirty_tree_records_dirty_state_and_uncommitted_paths(self, tmp_path):
+        writer = _build_synthetic_writer(tmp_path)
+        writer.git_provenance_resolver = self._stub(
+            GitProvenance(
+                commit="b" * 40,
+                dirty=True,
+                uncommitted_paths=("src/infra/manifest.py", "tests/unit/test_manifest.py"),
+            )
+        )
+
+        provenance = writer.build()["git_provenance"]
+
+        assert provenance["state"] == GIT_STATE_DIRTY
+        assert provenance["commit"] == "b" * 40
+        assert provenance["dirty"] is True
+        assert provenance["uncommitted_paths"] == [
+            "src/infra/manifest.py",
+            "tests/unit/test_manifest.py",
+        ]
+
+    def test_unavailable_commit_is_recorded_explicitly_not_omitted(self, tmp_path):
+        writer = _build_synthetic_writer(tmp_path)
+        writer.git_provenance_resolver = self._stub(
+            GitProvenance.unavailable("git executable not found on PATH")
+        )
+
+        manifest = writer.build()
+
+        # Requirement 15.5: the field is present and explicitly marked, never
+        # absent and never null.
+        assert "git_provenance" in manifest
+        provenance = manifest["git_provenance"]
+        assert provenance["state"] == GIT_COMMIT_UNAVAILABLE
+        assert provenance["commit"] == GIT_COMMIT_UNAVAILABLE
+        assert provenance["unavailable_reason"] == "git executable not found on PATH"
+
+    def test_resolver_that_raises_is_recorded_as_unavailable(self, tmp_path):
+        def exploding_resolver():
+            raise RuntimeError("git subsystem is on fire")
+
+        writer = _build_synthetic_writer(tmp_path)
+        writer.git_provenance_resolver = exploding_resolver
+
+        provenance = writer.build()["git_provenance"]
+
+        assert provenance["state"] == GIT_COMMIT_UNAVAILABLE
+        assert "RuntimeError" in provenance["unavailable_reason"]
+
+    def test_resolver_returning_wrong_type_is_recorded_as_unavailable(self, tmp_path):
+        writer = _build_synthetic_writer(tmp_path)
+        writer.git_provenance_resolver = lambda: "d43bd1d"
+
+        provenance = writer.build()["git_provenance"]
+
+        assert provenance["state"] == GIT_COMMIT_UNAVAILABLE
+        assert "not a GitProvenance" in provenance["unavailable_reason"]
+
+    def test_provenance_is_recorded_on_write_not_only_on_build(self, tmp_path):
+        writer = _build_synthetic_writer(tmp_path)
+        writer.git_provenance_resolver = self._stub(GitProvenance(commit="c" * 40))
+        target = tmp_path / "manifest.json"
+
+        writer.write(target)
+
+        on_disk = json.loads(target.read_text())
+        assert on_disk["git_provenance"]["commit"] == "c" * 40
+        assert on_disk["git_provenance"]["state"] == GIT_STATE_CLEAN
+
+
+class TestArtifactCommitBinding:
+    """Every written checkpoint path and result directory is bound to the commit.
+
+    **Validates: Requirements 15.4, 15.5**
+    """
+
+    def test_checkpoints_and_result_directories_are_bound_to_the_commit(self, tmp_path):
+        writer = _build_synthetic_writer(tmp_path)
+        writer.add_checkpoint_path(str(tmp_path / "checkpoints" / "ensemble_seed101.pt"))
+        writer.add_result_directory(str(tmp_path / "abc123deadbeef00"))
+        writer.git_provenance_resolver = lambda: GitProvenance(commit="d" * 40)
+
+        bindings = writer.build()["artifact_commit_bindings"]
+
+        # Two checkpoints (one from the shared fixture) and one result directory.
+        assert len(bindings) == 3
+        assert {b["artifact_kind"] for b in bindings} == {"checkpoint", "result_directory"}
+        assert all(b["git_commit"] == "d" * 40 for b in bindings)
+        assert all(b["git_state"] == GIT_STATE_CLEAN for b in bindings)
+        bound_artifacts = {b["artifact"] for b in bindings}
+        assert str(tmp_path / "checkpoints" / "ensemble_seed101.pt") in bound_artifacts
+        assert str(tmp_path / "abc123deadbeef00") in bound_artifacts
+
+    def test_bindings_carry_the_dirty_state_alongside_the_commit(self, tmp_path):
+        writer = _build_synthetic_writer(tmp_path)
+        writer.add_result_directory(str(tmp_path / "abc123deadbeef00"))
+        writer.git_provenance_resolver = lambda: GitProvenance(
+            commit="e" * 40, dirty=True, uncommitted_paths=("src/infra/manifest.py",)
+        )
+
+        bindings = writer.build()["artifact_commit_bindings"]
+
+        assert bindings
+        assert all(b["git_state"] == GIT_STATE_DIRTY for b in bindings)
+
+    def test_binding_is_present_with_unavailable_marker_when_commit_unresolvable(self, tmp_path):
+        writer = _build_synthetic_writer(tmp_path)
+        writer.add_result_directory(str(tmp_path / "abc123deadbeef00"))
+        writer.git_provenance_resolver = lambda: GitProvenance.unavailable("not a git repository")
+
+        bindings = writer.build()["artifact_commit_bindings"]
+
+        assert bindings
+        assert all(b["git_commit"] == GIT_COMMIT_UNAVAILABLE for b in bindings)
+        assert all(b["git_state"] == GIT_COMMIT_UNAVAILABLE for b in bindings)
+
+    def test_bindings_are_empty_when_no_artifact_was_recorded(self, tmp_path):
+        writer = ManifestWriter(
+            experiment_id="abc123deadbeef00",
+            stage="cohort_construction",
+            git_provenance_resolver=lambda: GitProvenance(commit="f" * 40),
+        )
+
+        assert writer.build()["artifact_commit_bindings"] == []
+
+
+class TestGitProvenanceValidation:
+    """`GitProvenance` refuses states that would serialize dishonestly.
+
+    **Validates: Requirements 15.2, 15.5**
+    """
+
+    def test_empty_commit_string_is_refused(self):
+        with pytest.raises(ValueError, match="non-empty identifier"):
+            GitProvenance(commit="   ")
+
+    def test_unavailable_state_requires_a_reason(self):
+        with pytest.raises(ValueError, match="unavailable_reason"):
+            GitProvenance(commit=None)
+
+    def test_unavailable_state_cannot_claim_cleanliness_knowledge(self):
+        with pytest.raises(ValueError, match="cleanliness"):
+            GitProvenance(commit=None, unavailable_reason="no repo", dirty=True)
+
+    def test_unavailable_reason_is_reduced_to_one_short_line(self):
+        provenance = GitProvenance.unavailable("fatal: not a git repository\nusage: git ...\n")
+
+        assert provenance.unavailable_reason == "fatal: not a git repository"
+
+    def test_states_are_exactly_clean_dirty_or_unavailable(self):
+        assert GitProvenance(commit="a" * 40).state == GIT_STATE_CLEAN
+        assert GitProvenance(commit="a" * 40, dirty=True).state == GIT_STATE_DIRTY
+        assert GitProvenance.unavailable("no git").state == GIT_COMMIT_UNAVAILABLE
+
+
+class TestDefaultResolver:
+    """The production resolver behaves on a real and on a non-repository path.
+
+    **Validates: Requirements 15.2, 15.5**
+    """
+
+    def test_resolver_reports_unavailable_outside_a_repository(self, tmp_path):
+        # `tmp_path` on macOS lives under /private/var, outside this project's
+        # repository, so `git rev-parse HEAD` there must fail rather than
+        # silently picking up an unrelated parent repository.
+        provenance = resolve_git_provenance(repo_root=tmp_path)
+
+        if provenance.available:
+            pytest.skip("temporary directory unexpectedly sits inside a git repository")
+        assert provenance.state == GIT_COMMIT_UNAVAILABLE
+        assert provenance.unavailable_reason
+
+    def test_resolver_reports_a_commit_for_this_repository(self):
+        provenance = resolve_git_provenance()
+
+        # This project is a git repository as of task 2; the working tree may
+        # legitimately be clean or dirty, but the commit must resolve and the
+        # state must be one of the two available states.
+        assert provenance.available
+        assert provenance.state in {GIT_STATE_CLEAN, GIT_STATE_DIRTY}
+        assert len(provenance.commit) >= 7
+        assert provenance.dirty == bool(provenance.uncommitted_paths)
+
+
+class TestDeviceRecording:
+    """The device a run executed on is recorded in that run's manifest.
+
+    **Validates: Requirement 5.7**
+    """
+
+    def test_set_device_is_recorded(self, tmp_path):
+        writer = _build_synthetic_writer(tmp_path)
+        writer.git_provenance_resolver = lambda: GitProvenance(commit="a" * 40)
+        writer.set_device("cuda")
+
+        assert writer.build()["device"] == "cuda"
+
+    def test_unset_device_records_the_explicit_sentinel(self, tmp_path):
+        writer = _build_synthetic_writer(tmp_path)
+        writer.git_provenance_resolver = lambda: GitProvenance(commit="a" * 40)
+
+        manifest = writer.build()
+
+        assert "device" in manifest
+        assert manifest["device"] == DEVICE_UNSPECIFIED
+
+    def test_empty_device_is_refused(self, tmp_path):
+        writer = _build_synthetic_writer(tmp_path)
+
+        with pytest.raises(ValueError, match="non-empty"):
+            writer.set_device("  ")
+
+
+class TestProvenanceSurvivesPrivacyScan:
+    """A recorded provenance block does not itself trip the privacy scanner.
+
+    **Validates: Requirements 2.4, 15.2**
+    """
+
+    def test_commit_sha_and_relative_uncommitted_paths_are_clean(self, tmp_path):
+        writer = _build_synthetic_writer(tmp_path)
+        writer.git_provenance_resolver = lambda: GitProvenance(
+            commit="d43bd1d9f0a1b2c3d4e5f60718293a4b5c6d7e8f",
+            dirty=True,
+            uncommitted_paths=("src/infra/manifest.py", "tests/unit/test_manifest.py"),
+        )
+        target = tmp_path / "manifest.json"
+
+        writer.write(target)
+
+        assert target.exists()
+        assert PrivacyScanner(allowed_path_prefixes=(str(tmp_path),)).scan(writer.build()) == []

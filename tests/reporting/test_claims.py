@@ -150,7 +150,7 @@ def _flatten_to_text(value: Any) -> str:
         return value
     if isinstance(value, dict):
         return " ".join(_flatten_to_text(v) for v in value.values())
-    if isinstance(value, (list, tuple)):
+    if isinstance(value, list | tuple):
         return " ".join(_flatten_to_text(v) for v in value)
     return str(value)
 

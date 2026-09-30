@@ -32,8 +32,8 @@ from cohorts.sealed_reference import InternalReference
 from evaluation.metrics import (
     PublishedReference,
     absolute_log_hr_error,
-    aurcc,
     auprc,
+    aurcc,
     auroc,
     calibration_slope_intercept,
     ci_overlap,

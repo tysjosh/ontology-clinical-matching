@@ -27,6 +27,16 @@ Currently implemented stages:
   data to be present at that path (see `docs/data_access.md`); refuses with
   a clear error if it is absent, rather than silently falling back to a
   synthetic cohort.
+- `seal-reference` (with the mandatory `--reseal` flag): the version-2
+  re-seal entry point named verbatim by
+  `cohorts.sealed_reference.RESEAL_INSTRUCTIONS` (`design.md` Section 2.6
+  "Tension 4"; Requirements 14.2, 14.6, 14.7). Rebuilds the complete
+  eligible arm-0/arm-1 cohort, seals it with
+  `extended_randomized_reference_estimator`, and writes
+  `reference/internal_randomized_reference.v2.sealed.json`. Refuses with a
+  non-zero exit if a version-2 artifact already exists at that path. The
+  version-1 artifact is never opened, and there is no code path here that
+  upgrades it in place.
 
 The frozen full pipeline order, and where each stage actually lives
 ------------------------------------------------------------------------
@@ -75,6 +85,7 @@ Usage:
     python scripts/run_stage.py --stage smoke --results-root /tmp/results
     python scripts/run_stage.py --stage full_pipeline
     python scripts/run_stage.py --stage real_data_pipeline
+    python scripts/run_stage.py --stage seal-reference --reseal
 """
 
 from __future__ import annotations
@@ -86,8 +97,14 @@ from pathlib import Path
 
 import yaml
 
+from cohorts.cohort_construction import build_randomized_cohort
 from cohorts.pipeline import run_observationalization_pipeline
-from cohorts.sealed_reference import unadjusted_cox_reference_estimator
+from cohorts.sealed_reference import (
+    SEALED_FORMAT_VERSION,
+    SealedReference,
+    extended_randomized_reference_estimator,
+    unadjusted_cox_reference_estimator,
+)
 from data.event_model import ClinicalEvent, MissingnessState
 from data.leakage_audit import LeakageAuditor
 from data.loaders.actg175 import Actg175DataNotFoundError, load_actg175
@@ -181,6 +198,9 @@ def _run_smoke(args: argparse.Namespace) -> int:
     writer.set_outcome_definition({"type": resolved.target_trial.outcome.get("type")})
     writer.set_model_config({"stage": "smoke"})
     writer.set_metrics({"smoke_check": "ok"})
+    # Bind this run's result directory to the commit the run executed from
+    # (Requirement 15.4). The commit itself is resolved inside `build()`.
+    writer.add_result_directory(str(results_root / experiment_id))
 
     manifest_path = results_root / experiment_id / "manifest.json"
     try:
@@ -204,8 +224,28 @@ DEFAULT_FULL_PIPELINE_TRIAL_CONFIG = REPO_ROOT / "configs" / "target_trials" / "
 
 #: The real, packaged raw ACTG175 v3.2 data directory (`docs/data_access.md`
 #: Section 2's approved storage location: `data/raw/`, gitignored). Used
-#: only by the `real_data_pipeline` stage.
+#: by the `real_data_pipeline` and `seal-reference` stages.
 DEFAULT_REAL_DATA_PATH = REPO_ROOT / "data" / "raw" / "actg175_v3_2"
+
+#: The sealed-reference directory (`design.md` Section 2.3's `reference/`),
+#: overridable via `--reference-dir` so tests can point the re-seal stage at
+#: a temp directory instead of the repository's real `reference/` tree.
+DEFAULT_REFERENCE_DIR = REPO_ROOT / "reference"
+
+#: The version-2 sealed-artifact filename (`design.md` Section 2.6
+#: "Tension 4" step 3; Requirement 14.6). This exact name is also quoted by
+#: `cohorts.sealed_reference.RESEAL_INSTRUCTIONS`, which names this script's
+#: `--stage seal-reference --reseal` as the re-seal entry point.
+V2_SEALED_REFERENCE_FILENAME = "internal_randomized_reference.v2.sealed.json"
+
+#: The version-1 sealed-artifact filename, recorded here only so a reader
+#: can see it named nowhere else in this module: the re-seal stage never
+#: opens, reads, parses, renames, or writes this file. `design.md` Section
+#: 2.6 "Tension 4" requires the migration to be a re-seal onto the new path
+#: above rather than an in-place upgrade, because a version-1 artifact does
+#: not contain the arm-wise risks and they cannot be recovered from a
+#: log-hazard-ratio.
+V1_SEALED_REFERENCE_FILENAME = "internal_randomized_reference.sealed.json"
 
 #: Timestamps for the tiny synthetic cohort built by `_build_tiny_synthetic_inputs`.
 _FULL_PIPELINE_ASSIGNMENT_TIME = datetime(2020, 1, 15, 9, 0, 0)
@@ -480,12 +520,161 @@ def _run_real_data_pipeline(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_seal_reference(args: argparse.Namespace) -> int:
+    """Re-seal the internal randomized reference in the version-2 format
+    (`design.md` Section 2.6 "Tension 4"; Requirements 14.2, 14.6, 14.7).
+
+    This is the entry point `cohorts.sealed_reference.RESEAL_INSTRUCTIONS`
+    names verbatim: `scripts/run_stage.py --stage seal-reference --reseal`,
+    "which refuses to run if a version-2 artifact already exists at the
+    target path". It performs the three documented steps, in order:
+
+    1. rebuild the complete eligible arm-0/arm-1 cohort via
+       `cohorts.cohort_construction.build_randomized_cohort` -- the Stage-3
+       output, pre-split and pre-observationalization, per `decisions.md`
+       Section 9's frozen order of operations (Requirement 14.2). Nothing
+       in this stage splits, preprocesses, or observationalizes: this stage
+       deliberately does NOT call
+       `cohorts.pipeline.run_observationalization_pipeline`, so no
+       post-split object exists anywhere in this function's scope for the
+       estimator to be handed by mistake;
+    2. construct `SealedReference(cohort,
+       extended_randomized_reference_estimator)`, which computes the
+       log-hazard-ratio and both arm-wise 96-week risks (plus their
+       difference) in one pass, eagerly, at construction time;
+    3. write the result to
+       `<--reference-dir>/internal_randomized_reference.v2.sealed.json`.
+
+    Three refusals, all before anything is read or written, each with a
+    non-zero exit code:
+
+    - no `--reseal` flag: sealing is a once-per-dataset act, so the flag is
+      the caller's explicit affirmation rather than something a typo in
+      `--stage` can trigger;
+    - a version-2 artifact already exists at the target path
+      (Requirement 14.7's counterpart on the write side): re-sealing would
+      overwrite a reference a later stage may already have consumed. The
+      existing file is not opened, only `Path.exists()`-checked -- reading
+      it would require a `LockedEvaluationToken` this script neither holds
+      nor mints;
+    - `--synthetic-cohort` together with the default `--reference-dir`: a
+      synthetic-fixture artifact must never be able to land at the path the
+      locked evaluation reads as the real randomized reference.
+
+    The version-1 artifact (`V1_SEALED_REFERENCE_FILENAME`) is left
+    byte-identical: this function never constructs a path to it and never
+    opens it. The re-seal is a fresh computation from the cohort, not a
+    transformation of the old file.
+
+    Nothing about the sealed value is printed. The only reader of a sealed
+    artifact is `cohorts.sealed_reference.read_sealed_artifact`, which
+    requires a valid token; echoing the freshly computed quantities to
+    stdout would route around that gate entirely. The stage reports the
+    cohort size, per-arm counts, format version, and destination path only.
+
+    Returns 0 on success, non-zero on any refusal or failure.
+    """
+    target = args.reference_dir / V2_SEALED_REFERENCE_FILENAME
+
+    if not args.reseal:
+        print(
+            "seal-reference stage refused: this stage runs only with the explicit "
+            "--reseal flag (`python scripts/run_stage.py --stage seal-reference "
+            "--reseal`). Sealing the internal randomized reference is a "
+            "once-per-dataset act, so the flag is a required affirmation rather "
+            "than a default. Nothing was read or written.",
+            file=sys.stderr,
+        )
+        return 1
+
+    if args.synthetic_cohort and args.reference_dir == DEFAULT_REFERENCE_DIR:
+        print(
+            "seal-reference stage refused: --synthetic-cohort requires an explicit "
+            f"--reference-dir outside the repository's real reference directory "
+            f"({DEFAULT_REFERENCE_DIR}). A synthetic-fixture artifact must never "
+            "be able to land where the locked external evaluation reads the real "
+            "internal randomized reference. Nothing was read or written.",
+            file=sys.stderr,
+        )
+        return 1
+
+    if target.exists():
+        print(
+            f"seal-reference stage refused: a version-{SEALED_FORMAT_VERSION} sealed "
+            f"artifact already exists at {target}. Re-sealing would overwrite a "
+            "reference later stages may already have consumed; move or delete it "
+            "deliberately if a re-seal is genuinely intended. The existing artifact "
+            "was not opened (reading it requires a LockedEvaluationToken, which this "
+            "script neither holds nor mints) and nothing was written.",
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
+        with args.trial_config.open("r", encoding="utf-8") as handle:
+            raw = yaml.safe_load(handle)
+        spec = TargetTrialSpec.model_validate(raw)
+
+        if args.synthetic_cohort:
+            print(
+                "WARNING: --synthetic-cohort is set, so the artifact written below "
+                "is computed from a tiny synthetic fixture and is NOT the real "
+                "internal randomized reference (decisions.md Section 2)."
+            )
+            timelines, treatment_arms = _build_tiny_synthetic_inputs()
+            endpoint_results = None
+        else:
+            tables = load_actg175(args.real_data_path)
+            timelines, treatment_arms, endpoint_results = raw_tables_to_pipeline_inputs(
+                tables
+            )
+            print(
+                f"loaded real ACTG175 data: {len(timelines)} arm-0/1 patients "
+                f"(checksum {tables.checksum_sha256[:12]}...)"
+            )
+
+        cohort = build_randomized_cohort(
+            timelines,
+            treatment_arms,
+            spec,
+            precomputed_endpoint_results=endpoint_results,
+        )
+        print(
+            f"complete eligible arm-0/arm-1 cohort rebuilt: {len(cohort)} patients "
+            f"(arm 0: {len(cohort.by_arm(0))}, arm 1: {len(cohort.by_arm(1))}); "
+            "pre-split, pre-observationalization"
+        )
+
+        sealed = SealedReference(cohort, estimator=extended_randomized_reference_estimator)
+        written_path = sealed.write_sealed_artifact(target)
+    except Actg175DataNotFoundError as exc:
+        print(
+            f"seal-reference stage failed: real ACTG175 data not found: {exc}. "
+            "See docs/data_access.md Section 2 for the approved storage location "
+            "(data/raw/actg175_v3_2/) and Section 5 for the data-use agreement.",
+            file=sys.stderr,
+        )
+        return 1
+    except Exception as exc:  # noqa: BLE001 -- top-level CLI boundary, see docstring
+        print(f"seal-reference stage failed: {exc}", file=sys.stderr)
+        return 1
+
+    print(
+        f"internal randomized reference re-sealed: {written_path} "
+        f"(format version {SEALED_FORMAT_VERSION}; values withheld until the locked "
+        "external evaluation)"
+    )
+    print("seal-reference stage succeeded")
+    return 0
+
+
 #: Dispatch table from `--stage` value to its runner function. Extend this
 #: (and `build_parser()`'s `choices=`) as later tasks implement more stages.
 _STAGE_RUNNERS = {
     "smoke": _run_smoke,
     "full_pipeline": _run_full_pipeline,
     "real_data_pipeline": _run_real_data_pipeline,
+    "seal-reference": _run_seal_reference,
 }
 
 
@@ -550,7 +739,35 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_REAL_DATA_PATH,
         help=(
             "Directory containing the real raw ACTG175 v3.2 table CSVs "
-            f"(real_data_pipeline stage only; default: {DEFAULT_REAL_DATA_PATH})."
+            "(real_data_pipeline and seal-reference stages only; default: "
+            f"{DEFAULT_REAL_DATA_PATH})."
+        ),
+    )
+    parser.add_argument(
+        "--reseal",
+        action="store_true",
+        help=(
+            "Required affirmation for the seal-reference stage, which refuses to "
+            "run without it (seal-reference stage only)."
+        ),
+    )
+    parser.add_argument(
+        "--reference-dir",
+        type=Path,
+        default=DEFAULT_REFERENCE_DIR,
+        help=(
+            f"Directory the sealed {V2_SEALED_REFERENCE_FILENAME} artifact is "
+            f"written to (seal-reference stage only; default: {DEFAULT_REFERENCE_DIR})."
+        ),
+    )
+    parser.add_argument(
+        "--synthetic-cohort",
+        action="store_true",
+        help=(
+            "Seal a tiny synthetic fixture cohort instead of the real ACTG175 data "
+            "(seal-reference stage only; test/development use). The resulting "
+            "artifact is NOT the real internal randomized reference, so this "
+            "requires an explicit --reference-dir."
         ),
     )
     return parser

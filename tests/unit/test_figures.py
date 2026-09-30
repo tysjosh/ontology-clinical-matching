@@ -102,7 +102,10 @@ def test_build_propensity_overlap_plot_runs_without_error():
             1: ArmPropensitySummary(n=100, minimum=0.4, maximum=0.95, mean=0.7, median=0.7),
         },
         common_support=CommonSupportSummary(
-            primary_count=180, primary_fraction=0.9, sensitivity_count=190, sensitivity_fraction=0.95
+            primary_count=180,
+            primary_fraction=0.9,
+            sensitivity_count=190,
+            sensitivity_fraction=0.95,
         ),
         extreme_weight_count=20,
         extreme_weight_fraction=0.1,

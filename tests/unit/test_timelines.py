@@ -195,8 +195,12 @@ def test_build_patient_timeline_rejects_unrecognized_modality():
 
 
 def test_build_patient_timelines_groups_events_by_patient_id():
-    other_patient_baseline = _event(patient_id="P002", concept_id="age", value=50.0, modality="baseline")
-    other_patient_lab = _event(patient_id="P002", concept_id="cd4_count", value=400.0, modality="lab")
+    other_patient_baseline = _event(
+        patient_id="P002", concept_id="age", value=50.0, modality="baseline"
+    )
+    other_patient_lab = _event(
+        patient_id="P002", concept_id="cd4_count", value=400.0, modality="lab"
+    )
 
     timelines = build_patient_timelines(ALL_EVENTS + [other_patient_baseline, other_patient_lab])
 
