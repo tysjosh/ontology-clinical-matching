@@ -139,9 +139,7 @@ def solve_linear_system(
     n = len(matrix)
     if n == 0:
         return []
-    augmented = [
-        [*map(float, row), float(value)] for row, value in zip(matrix, rhs, strict=True)
-    ]
+    augmented = [[*map(float, row), float(value)] for row, value in zip(matrix, rhs, strict=True)]
     scale = max((abs(v) for row in augmented for v in row[:n]), default=0.0)
     if scale == 0.0 or not math.isfinite(scale):
         return None
@@ -155,8 +153,7 @@ def solve_linear_system(
             factor = augmented[row][col] / pivot
             if factor != 0.0:
                 augmented[row] = [
-                    a - factor * b
-                    for a, b in zip(augmented[row], augmented[col], strict=True)
+                    a - factor * b for a, b in zip(augmented[row], augmented[col], strict=True)
                 ]
     solution = [0.0] * n
     for row in range(n - 1, -1, -1):
@@ -508,8 +505,7 @@ def fit_cox_newton(
             s0[i] = s0[i + 1] + exp_w[i]
             s1[i] = [s1[i + 1][a] + exp_w[i] * row[a] for a in range(k)]
             s2[i] = [
-                [s2[i + 1][a][b] + exp_w[i] * row[a] * row[b] for b in range(k)]
-                for a in range(k)
+                [s2[i + 1][a][b] + exp_w[i] * row[a] * row[b] for b in range(k)] for a in range(k)
             ]
         loglik = 0.0
         score = [0.0] * k

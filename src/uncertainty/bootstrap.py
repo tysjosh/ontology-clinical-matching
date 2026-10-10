@@ -46,10 +46,10 @@ from __future__ import annotations
 import math
 import random
 from collections.abc import Callable, Sequence
-
-from causal.solvers import SolverConvergenceError
 from dataclasses import dataclass
 from typing import TypeVar
+
+from causal.solvers import SolverConvergenceError
 
 DataT = TypeVar("DataT")
 

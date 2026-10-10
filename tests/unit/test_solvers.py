@@ -85,7 +85,7 @@ def _cox_score(beta, features, times, events, weights):
         if d:
             risk = range(i, n)
             risk_weight = {
-                m: weights[m] * math.exp(sum(b * x for b, x in zip(beta, features[m])))
+                m: weights[m] * math.exp(sum(b * x for b, x in zip(beta, features[m], strict=True)))
                 for m in risk
             }
             s0 = sum(risk_weight.values())

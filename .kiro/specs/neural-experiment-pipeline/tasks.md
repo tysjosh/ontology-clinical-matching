@@ -283,10 +283,11 @@ Task numbering continues the parent plan's conventions: numbered groups, `- [ ]`
   - Add a CUDA/CPU agreement integration test guarded by `torch.cuda.is_available()`, skipped locally and executed once on the A100 host, with its output recorded in the run manifest
   - _Requirements: 2.5, 2.6, 4.2, 5.4, 5.5, 18.7_
 
-- [ ] 11. Checkpoint - ensure all tests pass in both environments
+- [x] 11. Checkpoint - ensure all tests pass in both environments
   - Run the full suite in the base (torch-free) environment and confirm the pre-existing tests plus the new torch-free tests pass with no skips beyond the `neural`-marked ones
   - Run the full suite with the `neural` extra installed and confirm the torch tests pass on CPU
   - Ensure all tests pass, ask the user if questions arise
+  - Completed (2026-10-10), both runs with `RUN_FULL_DIAGNOSTIC_SWEEP=1` and real data present. Torch-free env (throwaway uv venv, Python 3.11, pydantic 2.9.2, PyYAML 6.0.2, pytest 8.3.3, hypothesis 6.115.5, no torch or numpy): 1060 passed, 17 skipped. Neural env (SADL venv, torch 2.4.1, numpy 1.26.4, CPU): 1247 passed, 5 skipped. Torch-free skips: 9 `tests/neural` modules and 5 torch-dependent tests that skip in-body by design (`test_decisions_match.py::test_section_25_hidden_width_is_one_shared_value`, four torch parameterizations in `tests/property/test_invariance.py`); 3 skips in both envs are for modules from tasks 12, 13 and 16. The other 2 neural-env skips are the CUDA agreement tests (A100 only). `ruff check src tests scripts` passes (ruff 0.6.9). No neural checkpoint is persisted in the repo (tests write to `tmp_path`), so the wider 14-column baseline tensor needs no retraining here; the determinism and gradient tests pass at the new width
 
 - [ ] 12. Implement the experiment variant dataclass and model factory
   - Write `src/models/variants.py` with the frozen `ExperimentVariant` carrying `name`, `model_family`, `treatment_representation`, `protocol_channel`, `overlap_gate`, `uncertainty_gate`, `clinical_constraints`, `enabled_witnesses`, `causal_adjustment`, and `balance_penalty_enabled`, with the allowed value sets of `design.md` Section 4.2
