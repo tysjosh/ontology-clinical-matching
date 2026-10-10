@@ -91,6 +91,7 @@ from datetime import datetime
 from itertools import groupby
 
 from causal.propensity import _feature_vector, _fit_standardization
+from causal.solvers import SolverConvergenceError, fit_cox_newton, fit_logistic_newton
 from cohorts.cohort_construction import PatientRecord
 
 #: The prespecified risk horizon for the outcome-regression / IPCW baselines.
@@ -101,14 +102,12 @@ HORIZON_WEEKS: float = 96.0
 #: an unbounded IPCW weight (see module docstring).
 _MIN_CENSORING_SURVIVAL: float = 0.05
 
-#: Cox / logistic gradient-ascent training configuration (fixed, not a
-#: `decisions.md`-frozen parameter -- see `causal.propensity` for the same
-#: pattern and rationale).
-_LEARNING_RATE: float = 0.05
-_N_ITERATIONS: int = 300
+#: The Cox and logistic fits below are solved to convergence by Newton-type
+#: methods in `causal.solvers` (`decisions.md` Section 26, task 7.9). Until
+#: task 7.8 they were 300 fixed gradient steps at learning rate 0.05, which
+#: shrank every Cox log-hazard ratio 40-50% toward the null.
 
-#: Bound applied to any linear predictor before `exp()`, to avoid overflow
-#: during gradient ascent.
+#: Bound applied to any linear predictor before `exp()`, to avoid overflow.
 _ETA_CLIP: float = 30.0
 
 
@@ -273,8 +272,8 @@ class _CoxRow:
 
 
 def _fit_cox(rows: Sequence[_CoxRow]) -> tuple[list[float], list[list[float]] | None]:
-    """Fit a (optionally weighted) Cox PH model via gradient ascent on the
-    Breslow-tie partial log-likelihood.
+    """Fit a (optionally weighted) Cox PH model by Newton-Raphson on the
+    Breslow-tie partial log-likelihood (`causal.solvers.fit_cox_newton`).
 
     Weighted partial likelihood (reduces to the ordinary Cox partial
     likelihood when every `weight == 1.0`), following the standard
@@ -290,95 +289,25 @@ def _fit_cox(rows: Sequence[_CoxRow]) -> tuple[list[float], list[list[float]] | 
     per-event).
 
     Returns:
-        `(beta, information_matrix)` -- `information_matrix` is the
-        observed-information matrix at the fitted `beta` (`None` if it
-        was singular and could not be used for inference).
+        `(beta, inverse_information)` -- the inverse of the observed
+        information matrix at the fitted `beta` (`None` if it was singular
+        and could not be used for inference).
+
+    Raises:
+        SolverConvergenceError: if Newton-Raphson does not meet the frozen
+            convergence rule; shrunk coefficients are never returned.
     """
     sorted_rows = sorted(rows, key=lambda row: row.event_time)
-    n = len(sorted_rows)
-    p = len(sorted_rows[0].features) if n else 0
-    beta = [0.0] * p
-
-    features = [row.features for row in sorted_rows]
-    weights = [row.weight for row in sorted_rows]
-    event_times = [row.event_time for row in sorted_rows]
-    event_flags = [row.event_indicator for row in sorted_rows]
-
-    # Precompute group boundaries (start index, size) for each distinct time.
-    group_bounds: list[tuple[int, int]] = []
-    index = 0
-    for _, group_iter in groupby(range(n), key=lambda i: event_times[i]):
-        group_indices = list(group_iter)
-        group_bounds.append((group_indices[0], len(group_indices)))
-        index += len(group_indices)
-
-    def _etas(current_beta: Sequence[float]) -> list[float]:
-        return [max(-_ETA_CLIP, min(_ETA_CLIP, _dot(current_beta, features[i]))) for i in range(n)]
-
-    for _ in range(_N_ITERATIONS):
-        etas = _etas(beta)
-        exp_eta_w = [weights[i] * math.exp(etas[i]) for i in range(n)]
-
-        # Suffix sums: S0[i] = sum_{k>=i} w_k*exp(eta_k); S1[i][m] likewise * x_k,m.
-        suffix_s0 = [0.0] * (n + 1)
-        suffix_s1 = [[0.0] * p for _ in range(n + 1)]
-        for i in range(n - 1, -1, -1):
-            suffix_s0[i] = suffix_s0[i + 1] + exp_eta_w[i]
-            row_features = features[i]
-            suffix_s1[i] = [suffix_s1[i + 1][m] + exp_eta_w[i] * row_features[m] for m in range(p)]
-
-        gradient = [0.0] * p
-        for start, size in group_bounds:
-            d_weight_sum = 0.0
-            sum_x_w = [0.0] * p
-            for i in range(start, start + size):
-                if event_flags[i]:
-                    d_weight_sum += weights[i]
-                    for m in range(p):
-                        sum_x_w[m] += weights[i] * features[i][m]
-            if d_weight_sum == 0.0:
-                continue
-            s0 = suffix_s0[start]
-            s1 = suffix_s1[start]
-            if s0 <= 0.0:
-                continue
-            for m in range(p):
-                gradient[m] += sum_x_w[m] - d_weight_sum * (s1[m] / s0)
-
-        beta = [b + _LEARNING_RATE * (g / n) for b, g in zip(beta, gradient, strict=True)]
-
-    # Observed information matrix at the final beta (for SE, once).
-    etas = _etas(beta)
-    exp_eta_w = [weights[i] * math.exp(etas[i]) for i in range(n)]
-    suffix_s0 = [0.0] * (n + 1)
-    suffix_s1 = [[0.0] * p for _ in range(n + 1)]
-    suffix_s2 = [[[0.0] * p for _ in range(p)] for _ in range(n + 1)]
-    for i in range(n - 1, -1, -1):
-        row_features = features[i]
-        suffix_s0[i] = suffix_s0[i + 1] + exp_eta_w[i]
-        suffix_s1[i] = [suffix_s1[i + 1][m] + exp_eta_w[i] * row_features[m] for m in range(p)]
-        suffix_s2[i] = [
-            [
-                suffix_s2[i + 1][m][k] + exp_eta_w[i] * row_features[m] * row_features[k]
-                for k in range(p)
-            ]
-            for m in range(p)
-        ]
-
-    information = [[0.0] * p for _ in range(p)]
-    for start, size in group_bounds:
-        d_weight_sum = sum(weights[i] for i in range(start, start + size) if event_flags[i])
-        if d_weight_sum == 0.0:
-            continue
-        s0 = suffix_s0[start]
-        if s0 <= 0.0:
-            continue
-        s1 = suffix_s1[start]
-        s2 = suffix_s2[start]
-        for m in range(p):
-            for k in range(p):
-                information[m][k] += d_weight_sum * (s2[m][k] / s0 - (s1[m] / s0) * (s1[k] / s0))
-
+    p = len(sorted_rows[0].features) if sorted_rows else 0
+    beta, diagnostic, information = fit_cox_newton(
+        [row.features for row in sorted_rows],
+        [row.event_time for row in sorted_rows],
+        [row.event_indicator for row in sorted_rows],
+        [row.weight for row in sorted_rows],
+        _ETA_CLIP,
+    )
+    if not diagnostic.converged:
+        raise SolverConvergenceError(f"Cox fit on {len(sorted_rows)} rows", diagnostic)
     inverse_information = _invert_matrix(information) if p > 0 else None
     return beta, inverse_information
 
@@ -427,6 +356,11 @@ def unadjusted_cox(patients: Sequence[PatientRecord]) -> CausalEstimate:
 
 def adjusted_cox(patients: Sequence[PatientRecord]) -> CausalEstimate:
     """Baseline 2: Cox PH with `treatment_arm` plus the full baseline covariate list.
+
+    The covariates are the fourteen encoded columns of the frozen Section 13
+    adjustment set (`causal.propensity.COVARIATE_FIELDS`, task 7.5), so the
+    model has fifteen coefficients: `treatment_arm` first, then those
+    columns in order (`models.non_neural_baseline.COEFFICIENT_NAMES`).
 
     Reuses `causal.propensity`'s covariate extraction and standardization
     (fit once, on the full input `patients`, since there is no cross-fitting
@@ -532,30 +466,17 @@ def _observed_by_horizon(patient: PatientRecord, horizon_weeks: float) -> bool:
 def _fit_logistic(
     features: Sequence[Sequence[float]], labels: Sequence[float]
 ) -> tuple[float, list[float]]:
-    """Minimal from-scratch logistic regression (bias + weights) via batch
-    gradient descent on binary cross-entropy -- same pattern as
-    `causal.propensity.LogisticPropensityModel`."""
-    n = len(features)
-    p = len(features[0]) if n else 0
-    weights = [0.0] * p
-    bias = 0.0
+    """Minimal from-scratch logistic regression (bias + weights), fit to
+    convergence by Newton / IRLS (`causal.solvers.fit_logistic_newton`) --
+    the same solver as `causal.propensity.LogisticPropensityModel`.
 
-    for _ in range(_N_ITERATIONS):
-        bias_gradient = 0.0
-        weight_gradients = [0.0] * p
-        for feature_row, label in zip(features, labels, strict=True):
-            logit = bias + _dot(weights, feature_row)
-            logit = max(-_ETA_CLIP, min(_ETA_CLIP, logit))
-            prediction = 1.0 / (1.0 + math.exp(-logit))
-            error = prediction - label
-            bias_gradient += error
-            for m, x in enumerate(feature_row):
-                weight_gradients[m] += error * x
-        bias -= _LEARNING_RATE * (bias_gradient / n)
-        weights = [
-            w - _LEARNING_RATE * (g / n) for w, g in zip(weights, weight_gradients, strict=True)
-        ]
-
+    Raises:
+        SolverConvergenceError: if the fit does not converge (e.g. a
+            covariate perfectly separates the outcome).
+    """
+    bias, weights, diagnostic = fit_logistic_newton(features, labels)
+    if not diagnostic.converged:
+        raise SolverConvergenceError(f"outcome logistic fit on {len(features)} rows", diagnostic)
     return bias, weights
 
 

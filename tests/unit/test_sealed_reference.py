@@ -341,6 +341,13 @@ def _extended_cohort(n_patients: int = 80) -> RandomizedCohort:
         if arm == 0:
             event_indicator = index % 4 == 0
             event_time_weeks = 20.0 + (index % 8) * 9.0
+            # Task 7.8: a few arm-0 patients are followed (censored) past
+            # every arm-1 event. Without them every arm-1 patient outlives
+            # every arm-0 patient, the Cox partial likelihood is monotone
+            # with no finite maximum, and the converged Newton fit correctly
+            # refuses; the old 300-step descent returned an arbitrary number.
+            if index % 8 == 6:
+                event_time_weeks = 140.0
         else:
             event_indicator = index % 6 == 1
             event_time_weeks = 100.0 + (index % 5) * 7.0

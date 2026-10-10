@@ -241,7 +241,10 @@ def test_version_1_reference_has_no_quantity_to_compare_against():
             f"p{index:03d}",
             treatment_arm=index % 2,
             event_time_weeks=40.0 + index,
-            event_indicator=index % 2 == 0,
+            # Task 7.8: one arm-1 event (index 3) keeps the Cox partial
+            # likelihood bounded; with arm 1 all censored it has no finite
+            # maximum and the converged fit correctly refuses.
+            event_indicator=index % 2 == 0 or index == 3,
         )
         for index in range(10)
     )

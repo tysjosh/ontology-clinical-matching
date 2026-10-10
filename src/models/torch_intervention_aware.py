@@ -46,8 +46,10 @@ Which tensors feed which channel (and why)
   per patient and reused identically at every landmark timestep"), and the
   frozen `STATE_INPUT_DIM = 4` admits nothing else: the per-landmark
   CD4/CD8 pair is 2 wide, not 4, and the standardized `TensorBatch.baseline`
-  block cannot supply these four fields either -- `baseline_cd8` is not in
-  `causal.propensity.COVARIATE_FIELDS`. It is also the only choice that
+  block is not the four-field state vector either: it carries all fourteen
+  encoded Section 13 columns of `causal.propensity.COVARIATE_FIELDS`
+  (`baseline_cd8` among them since task 7.5), not the four
+  `BASELINE_STATE_INIT_FIELDS` alone. It is also the only choice that
   keeps the CD4/CD8 state head honest: feeding the observed CD4/CD8 at
   landmark `t` into the encoder would make the head that predicts CD4/CD8
   at landmark `t` partly a copy of its own input.

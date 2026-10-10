@@ -102,6 +102,8 @@ _TENSOR_FIELDS: tuple[str, ...] = (
     "intervention",
     "bin_index",
     "censoring_mask",
+    "event_indicator",
+    "event_time_weeks",
 )
 
 #: `(field name, DatasetDimensions attribute, independently imported width)`
@@ -120,7 +122,13 @@ _TRAILING_WIDTHS: tuple[tuple[str, str, int], ...] = (
 )
 
 #: Fields that are one value per patient, so `(N,)`.
-_ROW_VECTOR_FIELDS: tuple[str, ...] = ("treatment_arm", "bin_index", "censoring_mask")
+_ROW_VECTOR_FIELDS: tuple[str, ...] = (
+    "treatment_arm",
+    "bin_index",
+    "censoring_mask",
+    "event_indicator",
+    "event_time_weeks",
+)
 
 #: The six CD4/CD8 landmark columns, as `(concept_id, landmark_index)` keys.
 _LANDMARK_COLUMNS: tuple[tuple[str, int], ...] = tuple(

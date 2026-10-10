@@ -23,16 +23,14 @@ those is a real dependency decision this task does not make unilaterally.
 Consequently:
 
 - `LogisticPropensityModel` is a **minimal, from-scratch logistic
-  regression** implemented in pure Python: batch gradient descent on
-  binary cross-entropy over a small, fixed covariate list, with
-  zero-initialized weights (deterministic without needing any random draw)
-  and a fixed learning rate/iteration count. This is appropriate for the
-  handful of covariates and moderate patient counts ACTG175 involves. It
-  is **not** a general-purpose ML library replacement -- it does not do
-  regularization, line search, or convergence diagnostics beyond a fixed
-  iteration budget. If this ever needs to scale beyond a handful of
-  covariates or patients, revisit the numpy/scikit-learn dependency
-  question explicitly rather than growing this loop further.
+  regression** implemented in pure Python, fit to convergence by Newton /
+  IRLS (`causal.solvers.fit_logistic_newton`) from a zero start: stop when
+  the Newton step's max |component| is below 1e-8, at most 100 iterations,
+  frozen in `decisions.md` Section 26 (task 7.9). Each fold's
+  `ConvergenceDiagnostic` is returned in `CrossFittedPredictions.convergence`,
+  and a fold that does not converge raises `SolverConvergenceError`. Until
+  task 7.8 this was 500 fixed gradient-descent steps with no tolerance,
+  which left the 14-column fit unconverged (gradient norm ~1e-2).
 - `BoostedPropensityModel` stores the exact frozen hyperparameters
   (`MAX_DEPTH=3`, `N_ESTIMATORS=200`, `LEARNING_RATE=0.05`) as class
   constants, satisfies the shared `PropensityModel` protocol structurally,
@@ -58,28 +56,85 @@ non-leakage (Correctness Property 3: no patient's prediction came from a
 model trained on data including that patient) can be verified directly
 rather than only inferred.
 
-Covariate list
----------------
+Covariate list (Section 13 adjustment set)
+-------------------------------------------
 
-Six baseline covariates, matching the fields `cohorts.selection.py` already
-uses for the frozen observationalization risk score (`decisions.md`
-Section 9's `r_i` inputs), read from
-`PatientRecord.timeline.static_covariates`:
+The propensity model adjusts for the full frozen `decisions.md` Section 13
+adjustment set: thirteen covariates, encoded as fourteen columns
+(`COVARIATE_FIELDS`). Until task 7.5 it used only Section 9's six
+observationalization inputs, which did not conform to Section 13 (see the
+Section 26 amendment of 2026-09-30, item 2). Section 9's risk score in
+`cohorts.selection` is a separate list and is unchanged.
 
-- `baseline_cd4`, `karnofsky_score`, `age` (continuous, standardized
-  in-fold using the training fold's own mean/stdev -- never test-fold
-  statistics, so no cross-fold leakage enters the standardization either);
-- `symptomatic_status`, `prior_opportunistic_infection` (raw boolean
-  indicators, coerced to `1.0`/`0.0`);
-- `prior_art` (derived indicator: `1.0` if the first present, numeric
-  value among `"prior_art_exposure_days"` /
-  `"prior_antiretroviral_exposure_duration"` is `> 0`, else `0.0` --
-  mirrors `cohorts.selection._prior_art_indicator`'s derivation exactly).
+Each Section 13 name is resolved to its stored `static_covariates` key(s)
+through `causal.adjustment_set.SECTION_13_ADJUSTMENT_SET`, never by name
+equality (`weight` is stored as `weight_kg`, `intravenous_drug_use_history`
+as `iv_drug_use_history`, and prior ART as `prior_art_exposure_days`).
 
-A missing or non-numeric raw value for any field defaults to `0.0` (for
-continuous fields, this only affects that patient's own feature value, not
-the fold's fitted mean/stdev, since missing values are excluded from the
-mean/stdev computation).
+Columns, in order, with their encoding and missing-value rule. "Missing"
+means no mapped key holds a non-`None` value.
+
+==  ===============================  ==================================  ===========================
+#   column                           encoding                            missing / unusable value
+==  ===============================  ==================================  ===========================
+1   `age`                            continuous, z-scored                `0.0` (the fold mean)
+2   `weight`                         continuous (kg), z-scored           `0.0` (the fold mean)
+3   `sex_female`                     `1.0` if `"F"`, `0.0` if `"M"`      `0.0`; any value other than
+                                     (reference level `"M"`)             `"M"`/`"F"` is missing
+4   `race_ethnicity_non_white`       `1.0` for any fitted level other    `0.0`; an unseen level (not
+                                     than `"white"`, `0.0` for           in the fitted category set)
+                                     `"white"` (reference level)         is also `0.0`
+5   `hemophilia`                     boolean, `1.0`/`0.0`                `0.0`
+6   `homosexual_activity`            boolean, `1.0`/`0.0`                `0.0`
+7   `intravenous_drug_use_history`   boolean, `1.0`/`0.0`                `0.0`
+8   `karnofsky_score`                continuous, z-scored                `0.0` (the fold mean)
+9   `prior_opportunistic_infection`  boolean, `1.0`/`0.0`                `0.0`
+10  `symptomatic_status`             boolean, `1.0`/`0.0`                `0.0`
+11  `baseline_cd4`                   continuous, z-scored                `0.0` (the fold mean)
+12  `baseline_cd8`                   continuous, z-scored                `0.0` (the fold mean)
+13  `prior_art`                      exposure indicator: `1.0` if the    `0.0`
+                                     stored duration is `> 0` days
+14  `prior_art_duration`             duration in days (zeros included),  `0.0` (the fold mean)
+                                     z-scored
+==  ===============================  ==================================  ===========================
+
+Columns 13-14 together encode Section 13's "prior antiretroviral exposure
+*and* duration": the indicator separates naive from experienced patients,
+and the standardized duration carries how long. Column 13 is derived
+exactly as `cohorts.selection._prior_art_indicator` derives it.
+
+Details of each rule:
+
+- **continuous** (z-scored): `(raw - mean) / stdev` with `mean` and the
+  population `stdev` fit on the training fold's observed numeric values
+  only. Missing or non-numeric values are excluded from the fit and encode
+  as `0.0`, the fold mean. A column with fewer than two observed values, or
+  zero stdev, encodes as `0.0` for everyone.
+- **boolean**: Python truthiness of the stored value, as `1.0`/`0.0`. The
+  loader stores real `bool`s for all five of these fields.
+- **binary_category** (`sex`, `race_ethnicity`): the category set is the
+  set of distinct stored string values seen in the training fold (for
+  `sex`, only values in the closed set `{"M", "F"}` count). A value encodes
+  as `1.0` only if it is in that fitted set and is not the reference level.
+  The reference level, a value not seen in the training fold, and a missing
+  value all encode as `0.0`, so an unseen category contributes like the
+  reference level (the usual drop-first, ignore-unknown convention) rather
+  than raising. `race_ethnicity` is a free string in the loader schema. The
+  real ACTG175 v3.2 source codes it as exactly two levels, `"white"` and
+  `"non-white"`, so the white / non-white contrast is lossless there. If a
+  source ever supplied more than one non-white level, they would all
+  collapse into this single column.
+- **exposure_and_duration**: the first mapped key holding a numeric value
+  gives the duration in days. Column 13 is `1.0` if it is `> 0`; column 14
+  is that duration z-scored like any continuous column.
+
+Leakage safety: every parameter above (means, stdevs, and category sets)
+is fit by `_fit_standardization` on the patients it is handed, which in
+cross-fitting is always the training folds only, never the fold being
+predicted. `models.dataset` calls the same function on Development_Split
+rows only. Only baseline keys are read (see `causal.adjustment_set`); no
+week-20 / week-96 measurement, event-derived field, or post-time-zero
+censoring information enters the feature vector.
 """
 
 from __future__ import annotations
@@ -87,97 +142,138 @@ from __future__ import annotations
 import math
 import statistics
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from typing import Protocol, runtime_checkable
 
+from causal.adjustment_set import (
+    ADJUSTMENT_COVARIATES_BY_NAME,
+    ENCODED_COLUMNS,
+    SECTION_13_ADJUSTMENT_SET,
+    AdjustmentCovariate,
+    resolve_raw_value,
+)
+from causal.solvers import ConvergenceDiagnostic, SolverConvergenceError, fit_logistic_newton
 from cohorts.cohort_construction import PatientRecord
 
 # ---------------------------------------------------------------------------
 # Covariate extraction (shared by both models)
 # ---------------------------------------------------------------------------
 
-#: Continuous covariate fields, standardized (z-scored) per training fold.
-_CONTINUOUS_FIELDS: tuple[str, ...] = ("baseline_cd4", "karnofsky_score", "age")
+#: The prior-ART Section 13 covariate (exposure indicator + duration).
+_PRIOR_ART = ADJUSTMENT_COVARIATES_BY_NAME["prior_antiretroviral_exposure_and_duration"]
 
-#: Raw boolean-indicator concept_ids, read directly (never standardized).
-_SYMPTOMATIC_CONCEPT_ID = "symptomatic_status"
-_PRIOR_OI_CONCEPT_ID = "prior_opportunistic_infection"
-
-#: `concept_id`s checked, in order, when deriving the `prior_art` indicator
-#: (mirrors `cohorts.selection._PRIOR_ART_CONCEPT_IDS`).
-_PRIOR_ART_CONCEPT_IDS: tuple[str, ...] = (
-    "prior_art_exposure_days",
-    "prior_antiretroviral_exposure_duration",
+#: The standardized (z-scored) column names, one per continuous covariate
+#: plus the prior-ART duration column, in `COVARIATE_FIELDS` order.
+_CONTINUOUS_FIELDS: tuple[str, ...] = tuple(
+    covariate.columns[0] if covariate.encoding == "continuous" else covariate.columns[1]
+    for covariate in SECTION_13_ADJUSTMENT_SET
+    if covariate.encoding in ("continuous", "exposure_and_duration")
 )
 
-#: The full, fixed covariate list both propensity models use, in order.
-#: Exposed for tests/documentation; not itself consumed positionally by
-#: callers outside this module.
-COVARIATE_FIELDS: tuple[str, ...] = (
-    *_CONTINUOUS_FIELDS,
-    _SYMPTOMATIC_CONCEPT_ID,
-    _PRIOR_OI_CONCEPT_ID,
-    "prior_art",
-)
+#: `{z-scored column: its continuous Section 13 covariate}` (the prior-ART
+#: duration column is handled separately by `_prior_art_duration`).
+_COVARIATE_BY_CONTINUOUS_COLUMN: dict[str, AdjustmentCovariate] = {
+    covariate.columns[0]: covariate
+    for covariate in SECTION_13_ADJUSTMENT_SET
+    if covariate.encoding == "continuous"
+}
+
+#: The fourteen encoded columns both propensity models use, in order (see
+#: the module docstring's table). `causal.baselines.adjusted_cox`,
+#: `models.non_neural_baseline.COEFFICIENT_NAMES`, and
+#: `models.dataset.TensorBatch.baseline` all follow this order.
+COVARIATE_FIELDS: tuple[str, ...] = ENCODED_COLUMNS
 
 
-def _raw_numeric(patient: PatientRecord, field_name: str) -> float | None:
-    """Read a raw numeric covariate, or `None` if missing/non-numeric."""
-    raw_value = patient.timeline.static_covariates.get(field_name)
+def _to_float(raw_value: object) -> float | None:
     if raw_value is None:
         return None
     try:
-        return float(raw_value)
+        return float(raw_value)  # type: ignore[arg-type]
     except (TypeError, ValueError):
         return None
 
 
-def _boolean_indicator(patient: PatientRecord, concept_id: str) -> float:
-    """A raw boolean-indicator covariate, coerced to `1.0`/`0.0` (missing = `0.0`)."""
-    raw_value = patient.timeline.static_covariates.get(concept_id)
+def _covariate_numeric(patient: PatientRecord, covariate: AdjustmentCovariate) -> float | None:
+    """A covariate's stored numeric value via the Section 13 mapping, or `None`."""
+    return _to_float(resolve_raw_value(patient.timeline.static_covariates, covariate))
+
+
+def _covariate_level(patient: PatientRecord, covariate: AdjustmentCovariate) -> str | None:
+    """A categorical covariate's stored level, or `None` if missing/unusable.
+
+    A non-string value, or a value outside `covariate.allowed_levels` when
+    that set is closed, is treated as missing.
+    """
+    raw_value = resolve_raw_value(patient.timeline.static_covariates, covariate)
+    if not isinstance(raw_value, str):
+        return None
+    if covariate.allowed_levels is not None and raw_value not in covariate.allowed_levels:
+        return None
+    return raw_value
+
+
+def _prior_art_duration(patient: PatientRecord) -> float | None:
+    """Prior-ART duration in days: the first mapped key holding a number."""
+    static_covariates = patient.timeline.static_covariates
+    for concept_id in _PRIOR_ART.concept_ids:
+        value = _to_float(static_covariates.get(concept_id))
+        if value is not None:
+            return value
+    return None
+
+
+def _prior_art_indicator(patient: PatientRecord) -> float:
+    """Derive the `prior_art` indicator (mirrors `cohorts.selection._prior_art_indicator`)."""
+    duration = _prior_art_duration(patient)
+    return 1.0 if duration is not None and duration > 0 else 0.0
+
+
+def _boolean_value(patient: PatientRecord, covariate: AdjustmentCovariate) -> float:
+    """A boolean covariate as `1.0`/`0.0` (missing = `0.0`)."""
+    raw_value = resolve_raw_value(patient.timeline.static_covariates, covariate)
     if raw_value is None:
         return 0.0
     return 1.0 if bool(raw_value) else 0.0
 
 
-def _prior_art_indicator(patient: PatientRecord) -> float:
-    """Derive the `prior_art` indicator (mirrors `cohorts.selection._prior_art_indicator`)."""
-    static_covariates = patient.timeline.static_covariates
-    for concept_id in _PRIOR_ART_CONCEPT_IDS:
-        if concept_id not in static_covariates:
-            continue
-        raw_value = static_covariates[concept_id]
-        if raw_value is None:
-            continue
-        try:
-            exposure = float(raw_value)
-        except (TypeError, ValueError):
-            continue
-        return 1.0 if exposure > 0 else 0.0
-    return 0.0
+def _continuous_raw(patient: PatientRecord, column: str) -> float | None:
+    """The raw numeric value behind a z-scored column in `_CONTINUOUS_FIELDS`."""
+    if column == _PRIOR_ART.columns[1]:
+        return _prior_art_duration(patient)
+    return _covariate_numeric(patient, _COVARIATE_BY_CONTINUOUS_COLUMN[column])
 
 
 @dataclass(frozen=True)
 class _StandardizationParams:
-    """Per-continuous-field `(mean, stdev)`, fit on one training fold only."""
+    """Every fitted encoding parameter, fit on one training fold only.
+
+    Attributes:
+        means / stdevs: per z-scored column (`_CONTINUOUS_FIELDS`).
+        category_sets: per `binary_category` Section 13 name, the distinct
+            levels seen in the fitting patients.
+    """
 
     means: Mapping[str, float]
     stdevs: Mapping[str, float]
+    category_sets: Mapping[str, frozenset[str]]
 
 
 def _fit_standardization(patients: Sequence[PatientRecord]) -> _StandardizationParams:
-    """Fit per-field mean/stdev for `_CONTINUOUS_FIELDS` on `patients` only.
+    """Fit every encoding parameter on `patients` only.
 
-    A field with fewer than two observed numeric values, or a computed
-    stdev of `0.0`, standardizes to `0.0` for every patient at transform
-    time (see `_standardized_value`) rather than dividing by zero.
+    Fits the mean and population stdev of each z-scored column over its
+    observed numeric values, and the category set of each categorical
+    covariate. A column with fewer than two observed numeric values, or a
+    computed stdev of `0.0`, standardizes to `0.0` for every patient at
+    transform time (see `_standardized_value`) rather than dividing by zero.
     """
     means: dict[str, float] = {}
     stdevs: dict[str, float] = {}
     for field_name in _CONTINUOUS_FIELDS:
         values = [
             value
-            for value in (_raw_numeric(patient, field_name) for patient in patients)
+            for value in (_continuous_raw(patient, field_name) for patient in patients)
             if value is not None
         ]
         if not values:
@@ -186,13 +282,23 @@ def _fit_standardization(patients: Sequence[PatientRecord]) -> _StandardizationP
             continue
         means[field_name] = statistics.fmean(values)
         stdevs[field_name] = statistics.pstdev(values) if len(values) > 1 else 0.0
-    return _StandardizationParams(means=means, stdevs=stdevs)
+
+    category_sets: dict[str, frozenset[str]] = {}
+    for covariate in SECTION_13_ADJUSTMENT_SET:
+        if covariate.encoding != "binary_category":
+            continue
+        category_sets[covariate.name] = frozenset(
+            level
+            for level in (_covariate_level(patient, covariate) for patient in patients)
+            if level is not None
+        )
+    return _StandardizationParams(means=means, stdevs=stdevs, category_sets=category_sets)
 
 
 def _standardized_value(
     patient: PatientRecord, field_name: str, params: _StandardizationParams
 ) -> float:
-    raw_value = _raw_numeric(patient, field_name)
+    raw_value = _continuous_raw(patient, field_name)
     if raw_value is None:
         return 0.0
     mean = params.means.get(field_name, 0.0)
@@ -200,20 +306,36 @@ def _standardized_value(
     return (raw_value - mean) / stdev if stdev > 0 else 0.0
 
 
+def _category_indicator(
+    patient: PatientRecord, covariate: AdjustmentCovariate, params: _StandardizationParams
+) -> float:
+    """`1.0` for a fitted, non-reference level; `0.0` for the reference
+    level, an unseen level, or a missing value."""
+    level = _covariate_level(patient, covariate)
+    if level is None or level == covariate.reference_level:
+        return 0.0
+    return 1.0 if level in params.category_sets.get(covariate.name, frozenset()) else 0.0
+
+
 def _feature_vector(patient: PatientRecord, params: _StandardizationParams) -> list[float]:
     """The fixed-order, fold-safe feature vector for one patient.
 
-    Continuous fields are standardized using `params` (always fit on the
-    *training* fold, never on the fold being predicted); the three
-    indicator fields are raw `1.0`/`0.0` values, never standardized.
+    One entry per `COVARIATE_FIELDS` column. Every fitted quantity comes
+    from `params`, which is always fit on the *training* fold, never on
+    the fold being predicted. Encodings are in the module docstring.
     """
-    continuous = [_standardized_value(patient, name, params) for name in _CONTINUOUS_FIELDS]
-    indicators = [
-        _boolean_indicator(patient, _SYMPTOMATIC_CONCEPT_ID),
-        _boolean_indicator(patient, _PRIOR_OI_CONCEPT_ID),
-        _prior_art_indicator(patient),
-    ]
-    return [*continuous, *indicators]
+    row: list[float] = []
+    for covariate in SECTION_13_ADJUSTMENT_SET:
+        if covariate.encoding == "continuous":
+            row.append(_standardized_value(patient, covariate.columns[0], params))
+        elif covariate.encoding == "boolean":
+            row.append(_boolean_value(patient, covariate))
+        elif covariate.encoding == "binary_category":
+            row.append(_category_indicator(patient, covariate, params))
+        else:  # exposure_and_duration
+            row.append(_prior_art_indicator(patient))
+            row.append(_standardized_value(patient, covariate.columns[1], params))
+    return row
 
 
 # ---------------------------------------------------------------------------
@@ -238,12 +360,16 @@ class CrossFittedPredictions:
             can be checked directly: for every fold, `set(training_patient_ids_by_fold[fold])`
             must be disjoint from `set(prediction_ids_for(fold))`.
         n_folds: the number of folds used.
+        convergence: `{fold index: ConvergenceDiagnostic}` for models that
+            report one (`LogisticPropensityModel` always does); empty
+            otherwise.
     """
 
     propensity_scores: dict[str, float]
     fold_of: dict[str, int]
     training_patient_ids_by_fold: dict[int, tuple[str, ...]]
     n_folds: int
+    convergence: dict[int, ConvergenceDiagnostic] = field(default_factory=dict)
 
     def prediction_ids_for(self, fold: int) -> tuple[str, ...]:
         """The patient IDs held out (and predicted) in `fold`, sorted."""
@@ -333,6 +459,7 @@ class _FittedLogistic:
     weights: tuple[float, ...]
     bias: float
     standardization: _StandardizationParams
+    diagnostic: ConvergenceDiagnostic | None = None
 
 
 def _sigmoid(x: float) -> float:
@@ -351,26 +478,23 @@ class LogisticPropensityModel:
     for this covariate set and patient count -- not a general-purpose ML
     library replacement.
 
-    Fixed, deterministic training configuration (not a `decisions.md`
-    frozen parameter -- these are this implementation's own defaults, kept
-    fixed so `fit_cross_fitted` is reproducible):
+    Deterministic training configuration (`decisions.md` Section 26, task
+    7.9):
 
-    - zero-initialized weights and bias (deterministic; no random draw is
-      needed for a convex objective like logistic regression, so `seed` is
-      accepted for interface parity with `BoostedPropensityModel` but does
-      not affect this model's fit);
-    - fixed learning rate (`LEARNING_RATE`) and iteration count
-      (`N_ITERATIONS`), used for plain batch gradient descent on binary
-      cross-entropy against `treatment_arm`.
+    - zero-initialized weights and bias, so no random draw is needed for this
+      convex objective; `seed` is accepted for interface parity with
+      `BoostedPropensityModel` and does not affect the fit;
+    - Newton / IRLS on mean binary cross-entropy against `treatment_arm`
+      (`causal.solvers.fit_logistic_newton`), stopping when the step's max
+      |component| is below `causal.solvers.SOLVER_TOLERANCE` (1e-8), capped
+      at `SOLVER_MAX_ITERATIONS` (100). A fold that does not converge raises
+      `SolverConvergenceError`; its coefficients are never used.
     """
-
-    LEARNING_RATE: float = 0.1
-    N_ITERATIONS: int = 500
 
     def __init__(self, seed: int = 0) -> None:
         #: Accepted for interface parity with `BoostedPropensityModel` and
         #: for documentation of intended reproducibility; unused by this
-        #: model's zero-initialized, deterministic gradient descent.
+        #: model's zero-initialized, deterministic Newton fit.
         self.seed = seed
 
     def _fit(self, train_patients: Sequence[PatientRecord]) -> _FittedLogistic:
@@ -381,29 +505,17 @@ class LogisticPropensityModel:
         features = [_feature_vector(patient, standardization) for patient in train_patients]
         labels = [float(patient.treatment_arm) for patient in train_patients]
 
-        n_features = len(COVARIATE_FIELDS)
-        weights = [0.0] * n_features
-        bias = 0.0
-        n = len(train_patients)
-
-        for _ in range(self.N_ITERATIONS):
-            weight_gradients = [0.0] * n_features
-            bias_gradient = 0.0
-            for feature_row, label in zip(features, labels, strict=True):
-                logit = bias + sum(w * x for w, x in zip(weights, feature_row, strict=True))
-                prediction = _sigmoid(logit)
-                error = prediction - label
-                bias_gradient += error
-                for j, x in enumerate(feature_row):
-                    weight_gradients[j] += error * x
-
-            bias -= self.LEARNING_RATE * (bias_gradient / n)
-            weights = [
-                w - self.LEARNING_RATE * (grad / n)
-                for w, grad in zip(weights, weight_gradients, strict=True)
-            ]
-
-        return _FittedLogistic(weights=tuple(weights), bias=bias, standardization=standardization)
+        bias, weights, diagnostic = fit_logistic_newton(features, labels)
+        if not diagnostic.converged:
+            raise SolverConvergenceError(
+                f"LogisticPropensityModel on {len(train_patients)} training patients", diagnostic
+            )
+        return _FittedLogistic(
+            weights=tuple(weights),
+            bias=bias,
+            standardization=standardization,
+            diagnostic=diagnostic,
+        )
 
     def _predict(
         self, fitted: _FittedLogistic, patients: Sequence[PatientRecord]
@@ -420,13 +532,23 @@ class LogisticPropensityModel:
     def fit_cross_fitted(
         self, data: Sequence[PatientRecord], n_folds: int = 5
     ) -> CrossFittedPredictions:
+        diagnostics: list[ConvergenceDiagnostic] = []
+
         def fit_predict_fold(
             train_patients: Sequence[PatientRecord], holdout_patients: Sequence[PatientRecord]
         ) -> dict[str, float]:
             fitted = self._fit(train_patients)
+            if fitted.diagnostic is not None:
+                diagnostics.append(fitted.diagnostic)
             return self._predict(fitted, holdout_patients)
 
-        return _cross_fit(data, n_folds, fit_predict_fold)
+        result = _cross_fit(data, n_folds, fit_predict_fold)
+        # `_cross_fit` visits folds in ascending order and skips only folds
+        # with no held-out patient, so diagnostics align with these folds.
+        fitted_folds = sorted(set(result.fold_of.values()))
+        if len(diagnostics) != len(fitted_folds):
+            return result
+        return replace(result, convergence=dict(zip(fitted_folds, diagnostics, strict=True)))
 
 
 # ---------------------------------------------------------------------------

@@ -25,19 +25,21 @@ dependencies = [
 # `torch_sequence_gru.py`, `torch_intervention_aware.py`, `torch_training.py`,
 # and the deferred imports inside `models.variants.build_model`).
 #
-# torch is pinned at 2.5.1: the version the project environment targets, so a
-# fresh install reproduces the same tensor library (Requirement 5.2).
+# torch is pinned at 2.4.1 because the project environment (the SADL venv)
+# runs 2.4.1, and the pin must match the environment that produces reported
+# results, so a fresh install reproduces the same tensor library
+# (Requirement 5.2).
 #
-# numpy is pinned at 1.26.4, the final 1.x release. torch 2.5.1 declares no
+# numpy is pinned at 1.26.4, the final 1.x release. torch 2.4.1 declares no
 # numpy dependency of its own, so the choice is ours. 1.26.4 is compatible
-# with torch 2.5.1 regardless of which numpy headers the torch wheels were
+# with torch 2.4.1 regardless of which numpy headers the torch wheels were
 # built against: extension modules built against numpy 2.x headers remain
 # runtime-compatible with numpy 1.x, whereas the reverse does not hold and
 # produces the `_ARRAY_API not found` failure. 1.26.4 also covers both
 # deployment targets in `decisions.md` Section 25 (local Apple-silicon CPU,
 # remote A100 CUDA) and satisfies requires-python >= 3.11.
 neural = [
-    "torch==2.5.1",
+    "torch==2.4.1",
     "numpy==1.26.4",
 ]
 dev = [

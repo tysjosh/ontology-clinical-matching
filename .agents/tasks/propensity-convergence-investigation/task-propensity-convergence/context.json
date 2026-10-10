@@ -1,0 +1,34 @@
+{
+  "project_type": "Python research codebase (causal inference benchmark on ACTG175 v3.2 plus a PyTorch neural layer); src/ layout, not installed in the venv",
+  "language": "Python 3.11+ (venv at /Users/olukotunjosh/Downloads/SADL/.venv, torch 2.4.1, numpy 1.26.4)",
+  "build_system": "pyproject.toml; project not installed, so every command needs PYTHONPATH=src",
+  "test_framework": "pytest; this workflow runs no repo tests and edits no repo files",
+  "run_command": "cd /Users/olukotunjosh/Downloads/clinical && perl -e 'alarm shift; exec @ARGV' 900 env PYTHONPATH=src /Users/olukotunjosh/Downloads/SADL/.venv/bin/python <script>",
+  "workspace": "/Users/olukotunjosh/Downloads/clinical/.agents/tasks/propensity-convergence-investigation (scripts/ and out/ only)",
+  "canonical_path": "master seed 20240101; derive_seed(master_seed, 'causal_analysis_pipeline') and derive_seed(master_seed, 'propensity') as in scripts/run_causal_analysis.py; 5-fold cross-fitting; Development_Split only; expected n=383, arms 201/182",
+  "key_files": [
+    "src/causal/propensity.py",
+    "src/causal/adjustment_set.py",
+    "src/causal/overlap.py",
+    "src/causal/weighting.py",
+    "src/causal/negative_controls.py",
+    "src/causal/baselines.py",
+    "src/models/non_neural_baseline.py",
+    "src/evaluation/metrics.py",
+    "scripts/run_causal_analysis.py",
+    ".kiro/specs/causal-witness-pwm/decisions.md (Sections 11, 11.3, 12, 13, 26)"
+  ],
+  "constraints": [
+    "Read-only: no edits to src/, tests/, scripts/, configs/, .kiro/",
+    "Never open the Test_Split or sealed reference",
+    "No package installs; no git writes",
+    "Patient ids only as pseudonymous index or hash prefix"
+  ],
+  "known_facts": {
+    "shipped_optimizer": "batch gradient descent, zero init, LEARNING_RATE=0.1, N_ITERATIONS=500, no tolerance; not frozen in decisions.md",
+    "shipped_convergence": "grad norm 6.7e-3 to 1.0e-2 per fold at 500 iterations; ~1e-3 at 5000; weights move 0.51-0.92 vs max |w| 0.41-0.60",
+    "shipped_support": "propensity [0.2092, 0.9305], ESS 184.74/144.40, extreme_weight_count 1, support_valid False",
+    "pre_7_5_support": "6 covariates: ESS 187.23/161.00, extreme_weight_count 0",
+    "encoded_columns": 14
+  }
+}

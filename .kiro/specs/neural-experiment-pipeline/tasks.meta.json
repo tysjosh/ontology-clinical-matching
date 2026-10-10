@@ -297,6 +297,16 @@
         "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
         "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
         "timestamp": 1788824959079
+      },
+      {
+        "executionId": "b2a1e8c8-27b8-4a0c-80f7-aa7c33cba22c",
+        "chatSessionId": "sess_f65bb3b8-a60b-4a15-83b3-83552ce73c07",
+        "timestamp": 1790734802062
+      },
+      {
+        "executionId": "9f970c4a-dc43-4731-88d1-da768252a09f",
+        "chatSessionId": "sess_f65bb3b8-a60b-4a15-83b3-83552ce73c07",
+        "timestamp": 1790739547049
       }
     ],
     "10.2 Implement device resolution, seeding, and manifest recording": [
@@ -304,6 +314,16 @@
         "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
         "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
         "timestamp": 1788824959109
+      },
+      {
+        "executionId": "9f970c4a-dc43-4731-88d1-da768252a09f",
+        "chatSessionId": "sess_f65bb3b8-a60b-4a15-83b3-83552ce73c07",
+        "timestamp": 1790739551169
+      },
+      {
+        "executionId": "9f970c4a-dc43-4731-88d1-da768252a09f",
+        "chatSessionId": "sess_f65bb3b8-a60b-4a15-83b3-83552ce73c07",
+        "timestamp": 1790740345975
       }
     ],
     "10.3 Write gradient, masking, and determinism tests": [
@@ -311,6 +331,16 @@
         "executionId": "c66f5daf-75e7-456d-908d-6c5456c72a8e",
         "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
         "timestamp": 1788824959138
+      },
+      {
+        "executionId": "9f970c4a-dc43-4731-88d1-da768252a09f",
+        "chatSessionId": "sess_f65bb3b8-a60b-4a15-83b3-83552ce73c07",
+        "timestamp": 1790740349917
+      },
+      {
+        "executionId": "9f970c4a-dc43-4731-88d1-da768252a09f",
+        "chatSessionId": "sess_f65bb3b8-a60b-4a15-83b3-83552ce73c07",
+        "timestamp": 1790742591724
       }
     ],
     "11. Checkpoint - ensure all tests pass in both environments": [
@@ -486,6 +516,32 @@
         "executionId": "d8c6481d-7082-48a2-847b-1155f506f102",
         "chatSessionId": "sess_5c9b0c18-8406-4008-825d-551a984a0a04",
         "timestamp": 1790733649891
+      }
+    ],
+    "10. Implement the training harness": [
+      {
+        "executionId": "9f970c4a-dc43-4731-88d1-da768252a09f",
+        "chatSessionId": "sess_f65bb3b8-a60b-4a15-83b3-83552ce73c07",
+        "timestamp": 1790742591782
+      }
+    ],
+    "7.4 Apply the approved Section 26 SMD-basis amendment to `decisions.md`": [
+      {
+        "executionId": "e002575f-4334-48a6-b0ac-eaf4c1cc5d36",
+        "chatSessionId": "sess_f65bb3b8-a60b-4a15-83b3-83552ce73c07",
+        "timestamp": 1790747967365
+      },
+      {
+        "executionId": "e002575f-4334-48a6-b0ac-eaf4c1cc5d36",
+        "chatSessionId": "sess_f65bb3b8-a60b-4a15-83b3-83552ce73c07",
+        "timestamp": 1790748561898
+      }
+    ],
+    "7.5 Conform the propensity model to the Section 13 adjustment set": [
+      {
+        "executionId": "e002575f-4334-48a6-b0ac-eaf4c1cc5d36",
+        "chatSessionId": "sess_f65bb3b8-a60b-4a15-83b3-83552ce73c07",
+        "timestamp": 1790748563091
       }
     ]
   }

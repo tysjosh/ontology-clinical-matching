@@ -579,17 +579,33 @@ def underived_sweep(underived: _Measurement) -> dict[str, object]:
 # --------------------------------------------------------------------------
 
 
-def test_positivity_condition_passes_on_the_canonical_seed_path(
+def test_positivity_condition_on_the_canonical_seed_path(
     canonical: _Measurement,
 ) -> None:
-    """The headline correction to task 7.3's premise: on the seed path
-    `scripts/run_causal_analysis.py` actually takes, no patient falls outside
-    the primary band and the fourth frozen condition PASSES."""
-    assert canonical.report.extreme_weight_count == 0
-    assert canonical.report.no_unresolved_positivity_warning is True
-    assert canonical.out_of_band == []
+    """The fourth frozen condition on the seed path
+    `scripts/run_causal_analysis.py` actually takes.
+
+    Before task 7.5 (six-covariate Section 9 propensity model) no patient
+    fell outside the primary band: `extreme_weight_count == 0`, propensity
+    range [0.2189, 0.8762] (500-step fit), condition PASSED. With the
+    Section 13 propensity model (14 encoded columns, task 7.5), fit to
+    convergence (task 7.8), one arm-0 patient sits at e = 0.9327, above the
+    primary upper bound 0.90 but inside the sensitivity band [0.05, 0.95]:
+    `extreme_weight_count == 1`, range [0.1798, 0.9327], condition FAILS.
+    The same patient is out of band under the old 500-step fit (0.9305) and
+    under every gradient-descent budget, so this is not an under-fitting
+    artifact. It is a measured cohort finding under the unchanged frozen
+    band, not a threshold question."""
+    assert canonical.report.extreme_weight_count == 1
+    assert canonical.report.no_unresolved_positivity_warning is False
+
+    (detail,) = canonical.out_of_band_detail()
+    propensity = detail["propensity"]
+    assert isinstance(propensity, float)
+    assert propensity > PRIMARY_SUPPORT_UPPER
+    assert detail["treatment_arm"] == _ARM_0
+    assert detail["inside_sensitivity_band"] is True
     assert PRIMARY_SUPPORT_LOWER < min(canonical.propensities.values())
-    assert max(canonical.propensities.values()) < PRIMARY_SUPPORT_UPPER
 
 
 def test_the_single_out_of_band_patient_is_inside_the_sensitivity_band(
@@ -692,15 +708,26 @@ def test_derived_200_replicate_ci_matches_a_real_200_replicate_run(
 def test_uncertain_comes_from_the_second_frozen_branch(
     canonical_sweep: dict[str, object],
 ) -> None:
-    """Which branch fires: the CI contains zero, and the absolute adjusted SMD
-    is at or above the frozen 0.10 threshold -- Section 11.3's third clause."""
-    assert canonical_sweep["abs_smd_at_or_above_threshold"] is True
+    """Which branch fires on the canonical path.
+
+    Task 7.3 measured `uncertain` (CI contains zero, |adjusted SMD| = 0.115 >=
+    0.10, Section 11.3's third clause). Task 7.8 found that five Section 13
+    covariates (`weight`, `sex`, `race_ethnicity`,
+    `intravenous_drug_use_history`, prior-ART exposure and duration) had
+    entered that regression as all-zero columns, because their names were
+    looked up verbatim rather than through the shared Section 13 mapping.
+    Adjusting for the full set, as Section 11.3 requires, gives an adjusted
+    SMD of -0.0906: below 0.10 with a CI containing zero, Section 11.3's
+    pass clause. Before: uncertain, -0.1150. After: pass, -0.0906. The
+    threshold is unchanged; the name keeps the task 7.3 history.
+    """
+    assert canonical_sweep["abs_smd_at_or_above_threshold"] is False
+    assert canonical_sweep["adjusted_smd_point_estimate"] == pytest.approx(-0.0906, abs=5e-4)
     by_seed = canonical_sweep["by_seed"]
     assert isinstance(by_seed, dict)
     for per_count in by_seed.values():
         for entry in per_count.values():
-            assert entry["classification"] == "uncertain"
-            assert entry["branch"] == "ci_contains_zero_but_abs_smd_at_or_above_threshold"
+            assert entry["classification"] == "pass"
             assert entry["ci_contains_zero"] is True
 
 
@@ -715,7 +742,8 @@ def test_classification_is_stable_across_seeds_and_bootstrap_counts(
     assert canonical_sweep["sweep_completeness"] == "complete"
     assert canonical_sweep["classification_stable"] is True
     assert canonical_sweep["classification_stable_across_full_frozen_sweep"] is True
-    assert canonical_sweep["distinct_classifications"] == ["uncertain"]
+    # Task 7.8: "uncertain" before the Section 13 encoding fix, "pass" after.
+    assert canonical_sweep["distinct_classifications"] == ["pass"]
 
 
 def test_reduced_sweep_records_what_it_actually_measured(
@@ -746,15 +774,15 @@ def test_reduced_sweep_records_what_it_actually_measured(
 def test_negative_control_outcome_is_also_seed_path_dependent(
     canonical_sweep: dict[str, object], underived_sweep: dict[str, object]
 ) -> None:
-    """The two findings do not co-occur. On the canonical path positivity
-    passes and the negative-control outcome is `uncertain`; on the un-derived
-    path positivity fails and the adjusted SMD falls BELOW the threshold, so
-    `uncertain` is unreachable there. The task text's two reported failures
-    therefore cannot both come from one run."""
-    assert canonical_sweep["abs_smd_at_or_above_threshold"] is True
+    """Task 7.3 found the two failures on different seed paths. After task
+    7.8 (converged fits, CD8 regression adjusted for the full Section 13 set)
+    the negative-control outcome passes on BOTH paths (canonical -0.0906,
+    un-derived -0.0669), so it no longer depends on the seed path. Before:
+    canonical uncertain (-0.1150), un-derived below threshold."""
+    assert canonical_sweep["abs_smd_at_or_above_threshold"] is False
     assert underived_sweep["abs_smd_at_or_above_threshold"] is False
-    assert canonical_sweep["distinct_classifications"] == ["uncertain"]
-    assert "uncertain" not in underived_sweep["distinct_classifications"]
+    assert canonical_sweep["distinct_classifications"] == ["pass"]
+    assert underived_sweep["distinct_classifications"] == ["pass"]
 
 
 def test_baseline_cd8_is_excluded_from_its_own_adjustment_set(
@@ -850,10 +878,12 @@ def test_writes_diagnostic_artifact(
             "(n=378) come from passing MASTER_SEED un-derived to both "
             "run_observationalization_pipeline and LogisticPropensityModel, while "
             "scripts/run_causal_analysis.py derives both and yields n=383. On the "
-            "canonical derived path the positivity condition PASSES (0 patients "
-            "out of band) and the negative-control outcome is uncertain. On the "
-            "un-derived path positivity fails on 1 patient and the "
-            "negative-control outcome's adjusted SMD is below threshold."
+            "canonical derived path, with the Section 13 propensity model (task "
+            "7.5) fit to convergence (task 7.8), positivity FAILS on 1 arm-0 "
+            "patient and the negative-control outcome is uncertain. With the "
+            "earlier six-covariate model the canonical path had 0 patients out "
+            "of band. On the un-derived path positivity fails on 1 arm-1 patient "
+            "and the negative-control outcome's adjusted SMD is below threshold."
         ),
         "positivity": {
             "condition": "no_unresolved_positivity_warning",
@@ -866,11 +896,29 @@ def test_writes_diagnostic_artifact(
             ),
             "canonical_seed_path": canonical.positivity_payload(),
             "underived_seed_path": underived.positivity_payload(),
-            "verdict": "artifact_of_a_documented_proxy",
+            "verdict": "genuine_diagnostic_signal_about_the_cohort",
             "verdict_evidence": (
-                "Three lines of evidence. (1) On the canonical seed path the "
-                "condition passes outright, so there is no cohort-level positivity "
-                "problem to explain. (2) On the un-derived path the single flagged "
+                "Canonical seed path (the one scripts/run_causal_analysis.py takes), "
+                "Section 13 propensity model fit to convergence: one ARM-0 patient "
+                "has e = 0.933. For an arm-0 patient a high propensity produces a "
+                "LARGE weight, and this patient carries the largest unclipped "
+                "stabilized IPW weight in the cohort (about 7.1, rank 383 of 383), "
+                "which the frozen primary 1st/99th-percentile clip reduces to about "
+                "2.5. So here the arm-agnostic proxy and the quantity it proxies for "
+                "agree: this is a real, if mild, positivity signal. It is driven by "
+                "a Karnofsky score about 4.4 SD below the fold mean plus a long "
+                "prior-ART exposure, a covariate profile with few comparable "
+                "arm-1 patients. It is mild: the patient is inside the sensitivity "
+                "band [0.05, 0.95], ESS stays above 138 per arm, and trimming at the "
+                "primary band would drop one patient with both arms above the "
+                "100-per-arm floor. It is not an under-fitting artifact (out of band "
+                "at every optimizer budget and at convergence) and not a defect."
+            ),
+            "underived_seed_path_verdict": "artifact_of_a_documented_proxy",
+            "underived_seed_path_verdict_evidence": (
+                "Superseded for the canonical path; kept for the un-derived path. "
+                "(1) Under the earlier six-covariate model the canonical path "
+                "passed outright. (2) On the un-derived path the single flagged "
                 "patient is an arm-1 patient whose propensity is just above 0.90 "
                 "and comfortably inside the frozen sensitivity band [0.05, 0.95]; "
                 "its stabilized IPW weight is in the bottom half of the weight "
@@ -895,20 +943,44 @@ def test_writes_diagnostic_artifact(
                 "the bootstrap CI contains zero; fail if the CI excludes zero; "
                 "uncertain if the CI contains zero but abs(adjusted smd) >= 0.10."
             ),
-            "branch_that_fired": "ci_contains_zero_but_abs_smd_at_or_above_threshold",
+            "branch_that_fired": "abs_smd_below_threshold_and_ci_contains_zero",
+            "history": (
+                "Task 7.3 measured uncertain (adjusted SMD -0.1150, CI containing "
+                "zero, |SMD| >= 0.10). Task 7.8 found that five Section 13 covariates "
+                "(weight, sex, race_ethnicity, intravenous_drug_use_history, prior "
+                "ART exposure and duration) had entered the regression as all-zero "
+                "columns because their names were looked up verbatim. Adjusted for "
+                "the full set via the shared Section 13 mapping, as Section 11.3 "
+                "requires, the adjusted SMD is -0.0906 and the check passes on all "
+                "five seeds at both replicate counts. The 0.10 threshold is unchanged."
+            ),
             "canonical_seed_path": canonical_sweep,
             "underived_seed_path": underived_sweep,
             "relation_to_task_7_2": (
                 "Task 7.2 measured baseline_cd8's raw SMD at -0.1363 and its "
                 "stabilized-IPW-weighted SMD at -0.1323 on the canonical path -- "
-                "essentially unmoved by weighting, because baseline_cd8 is absent "
-                "from causal.propensity.COVARIATE_FIELDS and cannot be added: "
-                "decisions.md Section 11.3 forbids adjusting for the "
-                "negative-control outcome. The regression-adjusted SMD measured "
-                "here lands in the same place through a different estimator."
+                "essentially unmoved by weighting, because baseline_cd8 was then "
+                "absent from causal.propensity.COVARIATE_FIELDS. (Task 7.2 said it "
+                "could not be added; that misread decisions.md Section 11.3, which "
+                "excludes CD8 only from this negative-control regression. Task 7.5 "
+                "added it to the propensity model.) The regression-adjusted SMD "
+                "measured here excludes CD8 from its own right-hand side, as 11.3 "
+                "requires, and is unaffected by the propensity model."
             ),
-            "verdict": "genuine_diagnostic_signal_about_the_cohort",
+            "verdict": "passes_after_full_adjustment_close_to_threshold",
             "verdict_evidence": (
+                "With every Section 13 covariate except baseline CD8 adjusted for, "
+                "the adjusted SMD is -0.0906: below the frozen 0.10 tolerance, CI "
+                "containing zero, identical classification across all five seeds "
+                "and both replicate counts, and on both seed paths. It sits close to "
+                "the threshold and the CI is wide (about [-0.29, 0.11]), so this is "
+                "a pass at this sample size, not evidence of perfect balance. The "
+                "earlier uncertain classification came from five silently "
+                "unadjusted covariates, not from the cohort."
+            ),
+            "superseded_verdict": "genuine_diagnostic_signal_about_the_cohort",
+            "superseded_verdict_evidence": (
+                "Task 7.3, before the Section 13 encoding fix: "
                 "The adjusted SMD is a real residual imbalance in baseline CD8 "
                 "between the observationalized arms, of the same magnitude and sign "
                 "task 7.2 measured raw and post-weighting, and it survives "
@@ -945,12 +1017,18 @@ def test_writes_diagnostic_artifact(
         reloaded["negative_control_outcome"]["canonical_seed_path"]["sweep_completeness"]
         == reloaded["sweep_completeness"]
     )
-    assert reloaded["positivity"]["verdict"] == "artifact_of_a_documented_proxy"
+    assert reloaded["positivity"]["verdict"] == "genuine_diagnostic_signal_about_the_cohort"
+    assert reloaded["positivity"]["underived_seed_path_verdict"] == "artifact_of_a_documented_proxy"
     assert (
         reloaded["negative_control_outcome"]["verdict"]
-        == "genuine_diagnostic_signal_about_the_cohort"
+        == "passes_after_full_adjustment_close_to_threshold"
     )
-    assert reloaded["positivity"]["canonical_seed_path"]["no_unresolved_positivity_warning"] is True
+    # Task 7.8: was True under the six-covariate 500-step model; False with the
+    # Section 13 model at convergence (one arm-0 patient at e = 0.933).
+    canonical_positivity = reloaded["positivity"]["canonical_seed_path"]
+    assert canonical_positivity["no_unresolved_positivity_warning"] is False
+    (flagged,) = canonical_positivity["out_of_primary_band_patients"]
+    assert flagged["treatment_arm"] == 0 and flagged["weight_rank_ascending"] == 383
     assert (
         reloaded["positivity"]["underived_seed_path"]["no_unresolved_positivity_warning"] is False
     )

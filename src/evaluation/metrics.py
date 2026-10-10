@@ -72,6 +72,7 @@ from dataclasses import dataclass
 from itertools import groupby
 
 from causal.baselines import CausalEstimate
+from causal.solvers import SolverConvergenceError, fit_logistic_newton
 from cohorts.sealed_reference import InternalReference, compare_to_reference
 
 #: The `InternalReference.quantities` key naming the randomized 96-week
@@ -81,11 +82,9 @@ from cohorts.sealed_reference import InternalReference, compare_to_reference
 #: (Requirements 14.3-14.4).
 RISK_DIFFERENCE_QUANTITY = "risk_difference"
 
-#: Learning-rate / iteration budget for the tiny 1-covariate logistic
-#: calibration fit below -- same fixed, non-frozen pattern used by the
-#: from-scratch logistic fits in `causal.propensity`/`causal.baselines`.
-_LEARNING_RATE: float = 0.1
-_N_ITERATIONS: int = 500
+#: The 1-covariate calibration fit below is solved to convergence by
+#: `causal.solvers.fit_logistic_newton` (`decisions.md` Section 26, task
+#: 7.9); until task 7.8 it was 500 fixed gradient steps.
 
 #: Bound applied to any logit before `exp()`/`log()`, avoiding overflow and
 #: `log(0)`.
@@ -358,33 +357,20 @@ def _logit(probability: float) -> float:
 
 def _fit_logistic_1d(x: Sequence[float], y: Sequence[float]) -> tuple[float, float]:
     """Tiny 1-covariate logistic regression `logit(Y) = intercept + slope * x`,
-    fit via batch gradient descent on binary cross-entropy.
-
-    Same from-scratch gradient-descent pattern already used elsewhere in
-    this codebase (`causal.propensity.LogisticPropensityModel`,
-    `causal.baselines._fit_logistic`), specialized to exactly one
-    covariate since that is all a calibration model needs.
+    fit to convergence by Newton / IRLS (`causal.solvers.fit_logistic_newton`).
 
     Returns:
         `(intercept, slope)`.
+
+    Raises:
+        SolverConvergenceError: if the fit does not converge, e.g. when the
+            predicted logits perfectly separate the labels (the calibration
+            slope is then unbounded and no finite value is reported).
     """
-    n = len(x)
-    intercept = 0.0
-    slope = 0.0
-
-    for _ in range(_N_ITERATIONS):
-        intercept_gradient = 0.0
-        slope_gradient = 0.0
-        for x_i, y_i in zip(x, y, strict=True):
-            logit = max(-_LOGIT_CLIP, min(_LOGIT_CLIP, intercept + slope * x_i))
-            prediction = 1.0 / (1.0 + math.exp(-logit))
-            error = prediction - y_i
-            intercept_gradient += error
-            slope_gradient += error * x_i
-        intercept -= _LEARNING_RATE * (intercept_gradient / n)
-        slope -= _LEARNING_RATE * (slope_gradient / n)
-
-    return intercept, slope
+    intercept, weights, diagnostic = fit_logistic_newton([[value] for value in x], y)
+    if not diagnostic.converged:
+        raise SolverConvergenceError(f"calibration fit on {len(x)} rows", diagnostic)
+    return intercept, weights[0]
 
 
 def calibration_slope_intercept(

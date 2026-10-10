@@ -385,14 +385,21 @@ def test_weighting_resolves_imbalance_only_for_modeled_covariates(
 
 
 def test_frozen_conditions_reproduce_as_measured(diagnosis: _Diagnosis) -> None:
-    """Records which of the four frozen conditions pass. Only `smd_sufficient`
-    fails, so `support_valid` is False for exactly one reason."""
+    """Records which of the four frozen conditions pass on the canonical path.
+
+    Before task 7.5 (six-covariate propensity model) only `smd_sufficient`
+    failed; `no_unresolved_positivity_warning` was True
+    (`extreme_weight_count == 0`). With the Section 13 propensity model
+    (task 7.5) one arm-0 patient has e = 0.9305 > 0.90, so
+    `no_unresolved_positivity_warning` is now False as well
+    (`extreme_weight_count == 1`). `smd_sufficient` is still the raw-basis
+    gate here; task 7.6 moves it to the weighted basis."""
     report = diagnosis.report
 
     assert report.arm_counts_sufficient is True
     assert report.ess_sufficient is True
     assert report.smd_sufficient is False
-    assert report.no_unresolved_positivity_warning is True
+    assert report.no_unresolved_positivity_warning is False
     assert report.support_valid is False
 
 

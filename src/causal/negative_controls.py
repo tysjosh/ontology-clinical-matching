@@ -87,7 +87,10 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Literal
 
+from causal.adjustment_set import ADJUSTMENT_COVARIATES_BY_NAME
 from causal.baselines import HORIZON_WEEKS, ipcw_aipw
+from causal.propensity import COVARIATE_FIELDS, _feature_vector, _fit_standardization
+from causal.solvers import SolverConvergenceError, fit_linear_exact
 from cohorts.cohort_construction import PatientRecord
 from data.leakage_audit import assert_no_self_adjustment
 from infra.seeding import derive_seed
@@ -107,11 +110,11 @@ NULL_TOLERANCE_BAND: tuple[float, float] = (-0.10, 0.10)
 #: threshold for the negative-control-outcome check.
 SMD_THRESHOLD: float = 0.10
 
-#: Gradient-descent configuration for the negative-control-outcome linear
-#: regression (mirrors `causal.baselines`/`causal.propensity`'s fixed,
-#: documented training defaults — not a `decisions.md`-frozen parameter).
-_LR_LEARNING_RATE: float = 0.1
-_LR_N_ITERATIONS: int = 300
+#: The negative-control-outcome linear regression is solved exactly by
+#: `causal.solvers.fit_linear_exact` (`decisions.md` Section 26, task 7.9);
+#: until task 7.8 it was 300 fixed gradient steps. A bootstrap replicate
+#: whose fit does not converge is skipped and counted in
+#: `n_bootstrap_successful`, the same way a NaN replicate already was.
 
 
 # ---------------------------------------------------------------------------
@@ -287,7 +290,10 @@ def run_negative_control_exposure(
     bootstrap_estimates: list[float] = []
     for _ in range(n_bootstrap):
         resample = [rng.choice(sham_patients) for _ in range(len(sham_patients))]
-        estimate = ipcw_aipw(resample, propensity_scores, horizon_weeks).estimate
+        try:
+            estimate = ipcw_aipw(resample, propensity_scores, horizon_weeks).estimate
+        except SolverConvergenceError:
+            continue
         if not math.isnan(estimate):
             bootstrap_estimates.append(estimate)
     bootstrap_estimates.sort()
@@ -396,34 +402,61 @@ def _generic_feature_vector(
 def _fit_linear_regression(
     features: Sequence[Sequence[float]], labels: Sequence[float]
 ) -> tuple[float, list[float]]:
-    """Minimal from-scratch linear regression (bias + weights) via batch
-    gradient descent on squared error -- same pattern as
-    `causal.baselines._fit_logistic`/`causal.propensity.LogisticPropensityModel`,
-    without the sigmoid link.
+    """Minimal from-scratch linear regression (bias + weights), solved
+    exactly (`causal.solvers.fit_linear_exact`).
+
+    Raises:
+        SolverConvergenceError: if the normal equations are singular.
     """
-    n = len(features)
-    p = len(features[0]) if n else 0
-    weights = [0.0] * p
-    bias = 0.0
-    if n == 0:
-        return bias, weights
-
-    for _ in range(_LR_N_ITERATIONS):
-        bias_gradient = 0.0
-        weight_gradients = [0.0] * p
-        for feature_row, label in zip(features, labels, strict=True):
-            prediction = bias + sum(w * x for w, x in zip(weights, feature_row, strict=True))
-            error = prediction - label
-            bias_gradient += error
-            for index, x in enumerate(feature_row):
-                weight_gradients[index] += error * x
-        bias -= _LR_LEARNING_RATE * (bias_gradient / n)
-        weights = [
-            w - _LR_LEARNING_RATE * (gradient / n)
-            for w, gradient in zip(weights, weight_gradients, strict=True)
-        ]
-
+    if not features:
+        return 0.0, []
+    bias, weights, diagnostic = fit_linear_exact(features, labels)
+    if not diagnostic.converged:
+        raise SolverConvergenceError(f"CD8 linear regression on {len(features)} rows", diagnostic)
     return bias, weights
+
+
+
+def _regression_covariate_rows(
+    patients: Sequence[PatientRecord], regression_covariates: Sequence[str]
+) -> list[list[float]]:
+    """Encoded right-hand-side covariates for the CD8 regression.
+
+    When every name is a frozen Section 13 covariate (the real call, with
+    `spec.adjustment_set` minus `baseline_cd8`), the columns come from the
+    shared Section 13 encoding (`causal.adjustment_set`, applied through
+    `causal.propensity._fit_standardization` / `_feature_vector`, fit on
+    `patients` only): stored-key resolution (`weight` -> `weight_kg`, ...),
+    binary categories, and prior-ART exposure plus duration. Only the
+    requested covariates' columns are kept, so `baseline_cd8` stays out
+    exactly as Section 11.3 requires.
+
+    Before this, the lookup was by raw Section 13 name, so `weight`, `sex`,
+    `race_ethnicity`, `intravenous_drug_use_history`, and
+    `prior_antiretroviral_exposure_and_duration` resolved to nothing and
+    entered the regression as all-zero columns, i.e. silently unadjusted.
+
+    Any name outside Section 13 falls back to the generic numeric lookup.
+    """
+    if regression_covariates and all(
+        name in ADJUSTMENT_COVARIATES_BY_NAME for name in regression_covariates
+    ):
+        wanted = {
+            column
+            for name in regression_covariates
+            for column in ADJUSTMENT_COVARIATES_BY_NAME[name].columns
+        }
+        keep = [index for index, column in enumerate(COVARIATE_FIELDS) if column in wanted]
+        params = _fit_standardization(patients)
+        return [
+            [vector[index] for index in keep]
+            for vector in (_feature_vector(patient, params) for patient in patients)
+        ]
+    standardization = _fit_generic_standardization(patients, regression_covariates)
+    return [
+        _generic_feature_vector(patient, regression_covariates, standardization)
+        for patient in patients
+    ]
 
 
 def _fit_cd8_regression_smd(
@@ -463,12 +496,11 @@ def _fit_cd8_regression_smd(
 
     mean_cd8 = statistics.fmean(cd8 for _, cd8 in rows)
     covariate_patients = [patient for patient, _ in rows]
-    standardization = _fit_generic_standardization(covariate_patients, regression_covariates)
+    covariate_rows = _regression_covariate_rows(covariate_patients, regression_covariates)
 
     features: list[list[float]] = []
     labels: list[float] = []
-    for patient, cd8 in rows:
-        covariate_row = _generic_feature_vector(patient, regression_covariates, standardization)
+    for (patient, cd8), covariate_row in zip(rows, covariate_rows, strict=True):
         features.append([float(patient.treatment_arm), *covariate_row])
         labels.append((cd8 - mean_cd8) / pooled_sd)
 
@@ -526,7 +558,10 @@ def run_negative_control_outcome(
     bootstrap_estimates: list[float] = []
     for _ in range(n_bootstrap):
         resample = [rng.choice(patient_list) for _ in range(len(patient_list))]
-        estimate = _fit_cd8_regression_smd(resample, regression_covariates)
+        try:
+            estimate = _fit_cd8_regression_smd(resample, regression_covariates)
+        except SolverConvergenceError:
+            continue
         if not math.isnan(estimate):
             bootstrap_estimates.append(estimate)
     bootstrap_estimates.sort()

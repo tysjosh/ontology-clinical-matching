@@ -46,6 +46,8 @@ from __future__ import annotations
 import math
 import random
 from collections.abc import Callable, Sequence
+
+from causal.solvers import SolverConvergenceError
 from dataclasses import dataclass
 from typing import TypeVar
 
@@ -158,7 +160,12 @@ def patient_level_bootstrap(
     replicate_estimates: list[float] = []
     for _ in range(n_replicates):
         resample = [data[rng.randrange(n)] for _ in range(n)]
-        estimate = estimator_fn(resample)
+        try:
+            estimate = estimator_fn(resample)
+        except SolverConvergenceError:
+            # A replicate whose fit does not meet the frozen convergence rule
+            # is dropped, exactly as a NaN replicate already is.
+            continue
         if not math.isnan(estimate):
             replicate_estimates.append(estimate)
     replicate_estimates.sort()

@@ -7,7 +7,7 @@ negative controls, export scanning, the sealed reference, the readiness
 ledger, the ablation matrix, the release gate -- must import and run in an
 environment where torch is not installed at all.
 
-Why a subprocess rather than a plain import test: torch 2.5.1 *is*
+Why a subprocess rather than a plain import test: torch 2.4.1 *is*
 installed in this project's environment (it is declared in the `neural`
 extra, and `dev` pulls that in). An in-process `import causal.baselines`
 therefore proves nothing -- a stray `import torch` would succeed silently.
@@ -59,6 +59,7 @@ MODELS_INIT = SRC_DIR / "models" / "__init__.py"
 #: Section 2.4. Modules not yet written are skipped individually (see
 #: `_MODULES_PENDING`), never dropped from this tuple.
 TORCH_FREE_MODULES = (
+    "causal.adjustment_set",
     "causal.baselines",
     "causal.overlap",
     "causal.propensity",

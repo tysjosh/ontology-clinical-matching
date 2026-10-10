@@ -26,3 +26,5 @@ reference/
 *.sqlite
 
 .DS_Store
+# Agent-workflow outputs carry patient-level values; same rule as results/.
+.agents/tasks/*/out/

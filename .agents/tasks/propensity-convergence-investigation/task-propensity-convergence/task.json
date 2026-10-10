@@ -1,0 +1,12 @@
+{
+  "task_id": "task-propensity-convergence",
+  "task_description": "Read-only investigation of the under-converged LogisticPropensityModel (500 fixed gradient-descent iterations, 14-column Section 13 design after task 7.5) and the canonical support failure (extreme_weight_count 0 -> 1, ESS 184.74/144.40, support_valid False). Compare shipped vs converged fits, trace the out-of-band patient, compare the pre-7.5 six-covariate model, audit the other fixed-budget fits in src/, and write findings with a recommended stopping rule. Plan: /Users/olukotunjosh/Downloads/clinical/.agents/tasks/propensity-convergence-investigation/plan.md (items 1-7).",
+  "status": "completed",
+  "feature_order": [
+    "INV-000",
+    "INV-001",
+    "INV-002",
+    "INV-003"
+  ],
+  "blocked_reason": null
+}

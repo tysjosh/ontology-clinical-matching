@@ -35,7 +35,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 PYPROJECT_PATH = REPO_ROOT / "pyproject.toml"
 
-PINNED_TORCH = "torch==2.5.1"
+PINNED_TORCH = "torch==2.4.1"
 PINNED_NUMPY = "numpy==1.26.4"
 VENUE = "ICLR 2027 main track"
 SUPERSEDED_VENUE = "NeurIPS 2026"

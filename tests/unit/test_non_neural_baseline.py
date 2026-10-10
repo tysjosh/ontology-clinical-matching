@@ -191,3 +191,25 @@ def test_predict_risk_matches_stored_risk_scores(patients):
         predicted = baseline.predict_risk(patient)
         stored = fitted.risk_scores[patient.patient_id]
         assert math.isclose(predicted, stored, rel_tol=1e-9)
+
+
+def test_coefficient_names_are_treatment_then_the_section_13_columns():
+    """Task 7.5: the Cox coefficient list follows the Section 13 adjustment
+    set's fourteen encoded columns (it was `treatment_arm` + six Section 9
+    inputs before)."""
+    from causal.propensity import COVARIATE_FIELDS
+
+    assert COEFFICIENT_NAMES == ("treatment_arm", *COVARIATE_FIELDS)
+    assert len(COEFFICIENT_NAMES) == 15
+    assert COEFFICIENT_NAMES[-3:] == ("baseline_cd8", "prior_art", "prior_art_duration")
+
+
+def test_adjusted_cox_and_cox_baseline_share_the_treatment_coefficient(patients):
+    """`causal.baselines.adjusted_cox` fits the identical fifteen-feature model."""
+    from causal.baselines import adjusted_cox
+
+    fitted = fit_cox_baseline(patients)
+    assert list(fitted.coefficients) == list(COEFFICIENT_NAMES)
+    assert adjusted_cox(patients).estimate == pytest.approx(
+        fitted.coefficients["treatment_arm"], abs=1e-9
+    )

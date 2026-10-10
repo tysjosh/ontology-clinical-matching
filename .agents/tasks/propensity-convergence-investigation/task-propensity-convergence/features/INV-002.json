@@ -1,0 +1,24 @@
+{
+  "id": "INV-002",
+  "type": "investigation",
+  "description": "Inventory of other fixed-budget gradient-descent fits in src/ and their convergence on canonical inputs, with the effect on each reported number or classification. Plan items 5-6.",
+  "status": "completed",
+  "depends_on": [
+    "INV-000"
+  ],
+  "steps": [
+    "Plan item 5",
+    "Plan item 6"
+  ],
+  "outputs": [
+    "out/fit_inventory.md",
+    "out/other_fits.json"
+  ],
+  "findings": [
+    "Five fixed-budget GD fits, none frozen: propensity (500/0.1), _fit_cox (300/0.05), baselines._fit_logistic (300/0.05), NCO linear regression (300/0.1), calibration (500/0.1).",
+    "Cox fits materially unconverged: log-HR unadjusted -0.377 vs -0.641, adjusted -0.499 vs -0.953, ps-weighted -0.586 vs -0.957 (CoxBaseline identical to adjusted).",
+    "Outcome regression materially unconverged (-0.083 vs -0.159). IPCW-AIPW immaterial (-0.158 vs -0.158). IPW has no fit.",
+    "Sealed internal reference uses the same unadjusted_cox (code check only; value not opened).",
+    "NCO CD8 regression converged enough (-0.1144 vs exact -0.1150, 'uncertain' both). Calibration immaterial (slope 0.573 vs 0.583)."
+  ]
+}

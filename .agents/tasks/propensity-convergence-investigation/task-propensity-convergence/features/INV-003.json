@@ -1,0 +1,19 @@
+{
+  "id": "INV-003",
+  "type": "investigation",
+  "description": "Synthesis: findings.md with the support-failure verdict, recommended optimizer and stopping rule with a draft (unapplied) Section 26 row, per-fit verdicts, and impact on neural-experiment-pipeline task 7.6. Plan item 7.",
+  "status": "completed",
+  "depends_on": [
+    "INV-001",
+    "INV-002"
+  ],
+  "steps": [
+    "Plan item 7"
+  ],
+  "outputs": [
+    "findings.md"
+  ],
+  "findings": [
+    "findings.md written: support failure is genuine (caused by the 7.5 prior-ART duration column, not by under-fitting); Cox and outcome-regression fits are the larger defect; recommend Newton/IRLS with a frozen tolerance and cap via a Section 26 row; sealed-reference handling needs a user decision."
+  ]
+}

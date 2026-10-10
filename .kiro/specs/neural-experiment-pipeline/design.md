@@ -117,7 +117,7 @@ Exactly five modules import torch:
 Guarantees:
 
 - `src/models/__init__.py` must not import any `torch_*` module or `dataset`. Enforced by `tests/unit/test_torch_isolation.py`, which runs a subprocess with a `sys.meta_path` hook that raises on `import torch`, then imports `causal.baselines`, `causal.overlap`, `causal.propensity`, `causal.negative_controls`, all three witness modules, `witnesses.aggregation`, `witnesses.audit_report`, `cohorts.pipeline`, `cohorts.sealed_reference`, `evaluation.metrics`, `evaluation.statistics`, `evaluation.ablation_matrix`, `evaluation.robustness`, `evaluation.release_gate`, `models.variants`, and `scripts.scan_exports`. Any torch import inside that subprocess fails the test.
-- `pyproject.toml` gains `torch==2.5.1` and `numpy` as pinned **optional** extras under a `neural` extra, plus a `dev` extra that includes `neural`. The base install stays `pydantic==2.9.2` + `PyYAML==6.0.2`, so the existing 679 tests keep running in a base environment. Requirement 5.1-5.2 asks that the manifest *declare pinned versions of torch and numpy*; declaring them as a pinned extra satisfies that while preserving torch-free operation of the non-neural layer. numpy is currently absent from the environment and must be installed with the extra — nothing in the existing code depends on it.
+- `pyproject.toml` gains `torch==2.4.1` and `numpy` as pinned **optional** extras under a `neural` extra, plus a `dev` extra that includes `neural`. The base install stays `pydantic==2.9.2` + `PyYAML==6.0.2`, so the existing 679 tests keep running in a base environment. Requirement 5.1-5.2 asks that the manifest *declare pinned versions of torch and numpy*; declaring them as a pinned extra satisfies that while preserving torch-free operation of the non-neural layer. numpy is currently absent from the environment and must be installed with the extra — nothing in the existing code depends on it.
 - Torch-requiring tests are collected under `tests/neural/` and marked `@pytest.mark.neural`, skipped via `importorskip("torch")`.
 
 Local machine is an Apple M2 with 8 GB and no CUDA (MPS available); training target is a remote A100 80 GB. `--device` accepts `cpu` (default) and `cuda` only, per `decisions.md` Section 25. MPS is deliberately **not** an accepted value: `torch.use_deterministic_algorithms(True)` has incomplete MPS coverage, and Requirement 5.5 requires cpu/cuda agreement within floating-point accumulation tolerance, a claim we would not be able to make for a third backend. Local validation runs on `cpu`; at hidden_size=16 and N≈380 with full-batch updates, CPU training of all 5 replicas is minutes, not hours.
@@ -309,7 +309,7 @@ class PatientDatasetBuilder:
     def dimensions(self) -> DatasetDimensions: ...   # Requirement 1.7
 ```
 
-`fit` computes standardization means/SDs over Development_Split rows with unmasked entries only, and is idempotent: repeated `fit` on the same input yields identical parameters (Requirement 1.4). `build` never refits. Column-level total-missingness (the real data's week-96 CD8 is 100% missing) causes that column's fit to be skipped, mask set missing for all patients in all three splits, and the placeholder used — no error (Requirement 1.9). Rows are ordered by ascending `patient_id`, deterministically, and the identifier tuple is returned alongside the tensors (Requirement 1.6). Empty input or a duplicate `patient_id` raises `DatasetBuildError` naming which (Requirement 1.8); an absent, non-finite, or negative-elapsed event time raises `DatasetBuildError` naming the patient and the reason, emitting nothing partial (Requirement 1.10).
+`fit` computes standardization means/SDs over Development_Split rows with unmasked entries only, including one mean/population-SD pair per `BASELINE_STATE_INIT_FIELDS` column for `state_init` (see Section 4.1), and is idempotent: repeated `fit` on the same input yields identical parameters (Requirement 1.4). `build` never refits. Column-level total-missingness (the real data's week-96 CD8 is 100% missing) causes that column's fit to be skipped, mask set missing for all patients in all three splits, and the placeholder used — no error (Requirement 1.9). Rows are ordered by ascending `patient_id`, deterministically, and the identifier tuple is returned alongside the tensors (Requirement 1.6). Empty input or a duplicate `patient_id` raises `DatasetBuildError` naming which (Requirement 1.8); an absent, non-finite, or negative-elapsed event time raises `DatasetBuildError` naming the patient and the reason, emitting nothing partial (Requirement 1.10).
 
 `dimensions` is what `build_model` reads, so no width is hard-coded in the factory (Requirement 1.7, 6.3).
 
@@ -627,7 +627,7 @@ class TensorBatch:
     split_name: str                     # "dev" | "val" | "test"
     patient_ids: tuple[str, ...]        # ascending, len N (Req 1.6)
     baseline: Tensor                    # (N, baseline_covariate_width) float32
-    state_init: Tensor                  # (N, 4) float32, BASELINE_STATE_INIT_FIELDS
+    state_init: Tensor                  # (N, 4) float32, BASELINE_STATE_INIT_FIELDS, z-scored per column with Development_Split-fitted mean / population SD (zero-SD column -> 0.0), applied unchanged to every split
     cd4: Tensor                         # (N, 3) float32, landmarks 0/20/96 in order
     cd8: Tensor                         # (N, 3) float32
     cd4_mask: Tensor                    # (N, 3) bool, True = observed
@@ -637,6 +637,8 @@ class TensorBatch:
     intervention: Tensor                # (N, 3) float32, intervention channel width
     bin_index: Tensor                   # (N,) int64, 0..22 inclusive (Req 1.2)
     censoring_mask: Tensor              # (N,) bool, True = censored before assigned bin start
+    event_indicator: Tensor             # (N,) bool, endpoint_result.event_indicator (task 10: survival NLL)
+    event_time_weeks: Tensor            # (N,) float32, elapsed weeks bin_index came from (task 10: concordance)
     dimensions: DatasetDimensions
 ```
 
@@ -645,6 +647,8 @@ Bin definition (23 bins, `decisions.md` Section 25): `[0,8), [8,16), ..., [168,1
 Masks are `True = observed`, `False = missing`. Every masked-missing entry in `cd4`/`cd8` holds exactly `MISSING_PLACEHOLDER = 0.0` — one fixed finite value, identical for every missing entry and every build, so the tensors contain no NaN or inf (Requirement 1.5). Zero is chosen because it is the additive identity for the mask-multiplied Huber term, making the zero-gradient guarantee exact rather than approximate. Real-data consequence: week-96 CD8 is 100% missing, so `cd8_mask[:, 2]` is `False` for every patient in all three splits, `cd8[:, 2]` is all zeros, and no preprocessing parameter is fitted for that column (Requirement 1.9).
 
 `censoring_mask[i]` is set for exactly those patients whose `endpoint_result.censoring_indicator` is set **and** whose censoring time falls before the start of the assigned bin (Requirement 1.2).
+
+`state_init` is standardized, not raw. Raw clinical scales (CD4 ~200, CD8 ~850, Karnofsky ~85, age ~36) saturated the models' `tanh` input projections to exactly ±1.0 in float32, giving the intervention-aware state encoder exactly zero gradient. This was found by `tests/neural/test_gradients.py` in task 10.3 and fixed in `src/models/dataset.py` (`_fit_state_init_standardization`, `_standardized_state_init`): per-column mean and population SD are fitted on Development_Split rows only (Requirement 1.4), after `_sanitized`, and applied unchanged by `build` to every split; a zero-SD column standardizes to 0.0.
 
 ### 4.2 `ExperimentVariant` — exact fields and allowed values (Requirement 6.1, 6.2)
 

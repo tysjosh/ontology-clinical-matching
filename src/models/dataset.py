@@ -46,7 +46,9 @@ tests it:
   `INTERVENTION_INPUT_DIM` (3), `PROTOCOL_INPUT_DIM` (2), and the
   per-channel feature conventions documented in that module's docstring.
 - **baseline-state-init vector**:
-  `models.sequence_baseline.extract_baseline_vector`.
+  `models.sequence_baseline.extract_baseline_vector`, z-scored per column
+  with development-fitted parameters (raw clinical scales saturate the
+  models' `tanh` input projections; see `_fit_state_init_standardization`).
 
 The frozen values this module carries
 -------------------------------------------------------------------------
@@ -75,8 +77,9 @@ Standardization and the fit/build split
 -------------------------------------------------------------------------
 
 `fit(dev_records)` computes standardization parameters from
-Development_Split rows only, and only from entries whose mask is
-`observed`. `build(records, split_name)` never fits: it applies the frozen
+Development_Split rows only -- for CD4/CD8 landmarks, only from entries
+whose mask is `observed`; for the baseline-state-init vector, per column.
+`build(records, split_name)` never fits: it applies the frozen
 parameters unchanged to development, validation, and test rows alike
 (Requirement 1.4). `fit` is deterministic, so refitting the same records
 reproduces the same parameters bit for bit.
@@ -309,7 +312,8 @@ class TensorBatch:
         baseline: `(N, baseline_covariate_width)` float32, columns in
             `causal.propensity.COVARIATE_FIELDS` order.
         state_init: `(N, 4)` float32,
-            `sequence_baseline.BASELINE_STATE_INIT_FIELDS` order.
+            `sequence_baseline.BASELINE_STATE_INIT_FIELDS` order, z-scored
+            with development-fitted per-column parameters.
         cd4: `(N, 3)` float32, landmark weeks 0/20/96 in that order.
         cd8: `(N, 3)` float32, same landmark order.
         cd4_mask: `(N, 3)` bool, `True = observed`.
@@ -322,6 +326,17 @@ class TensorBatch:
         censoring_mask: `(N,)` bool, `True` for patients whose
             `endpoint_result.censoring_indicator` is set *and* whose
             censoring time falls before the start of their assigned bin.
+        event_indicator: `(N,)` bool, `endpoint_result.event_indicator`
+            (`True` = composite event observed, `False` = censored). Added
+            for task 10: the discrete-time survival NLL needs to know
+            whether bin `bin_index[i]` holds an event or a censoring, and
+            `censoring_mask` (a narrower condition) cannot tell it.
+        event_time_weeks: `(N,)` float32, the same elapsed weeks
+            `bin_index` was computed from (`causal.baselines._elapsed_weeks`).
+            Added for task 10: validation concordance
+            (`evaluation.metrics.concordance_index`) is computed on
+            continuous event times, not on bin indices, so it does not
+            collapse every within-bin pair into an uninformative tie.
         dimensions: the widths above, as data.
     """
 
@@ -338,6 +353,8 @@ class TensorBatch:
     intervention: Tensor
     bin_index: Tensor
     censoring_mask: Tensor
+    event_indicator: Tensor
+    event_time_weeks: Tensor
     dimensions: DatasetDimensions
 
 
@@ -614,6 +631,7 @@ class PatientDatasetBuilder:
     def __init__(self) -> None:
         self._baseline_params: _StandardizationParams | None = None
         self._landmark_params: dict[tuple[str, int], LandmarkStandardization] | None = None
+        self._state_init_params: tuple[LandmarkStandardization, ...] | None = None
 
     # -- fitting ---------------------------------------------------------
 
@@ -630,7 +648,9 @@ class PatientDatasetBuilder:
           column's *observed* development entries only -- masked-missing
           entries never enter a mean or a standard deviation
           (Requirement 1.4). A column with no observed development entry
-          gets no parameter at all (Requirement 1.9).
+          gets no parameter at all (Requirement 1.9);
+        - one `(mean, stdev)` per `BASELINE_STATE_INIT_FIELDS` column of the
+          baseline-state-init vector (see `_fit_state_init_standardization`).
 
         Deterministic, hence idempotent: refitting the same records
         reproduces identical parameters, and refitting replaces rather than
@@ -672,14 +692,30 @@ class PatientDatasetBuilder:
                     mean=mean, stdev=stdev
                 )
 
+        state_init_params = _fit_state_init_standardization(ordered)
+
         self._baseline_params = baseline_params
         self._landmark_params = landmark_params
+        self._state_init_params = state_init_params
         return self
 
     @property
     def is_fitted(self) -> bool:
         """Whether `fit` has run."""
-        return self._baseline_params is not None and self._landmark_params is not None
+        return (
+            self._baseline_params is not None
+            and self._landmark_params is not None
+            and self._state_init_params is not None
+        )
+
+    @property
+    def fitted_state_init_params(self) -> tuple[LandmarkStandardization, ...]:
+        """The development-fitted `(mean, stdev)` per `BASELINE_STATE_INIT_FIELDS` column."""
+        if self._state_init_params is None:
+            raise DatasetBuildError(
+                "fitted_state_init_params was read before fit(); call fit(dev_records) first."
+            )
+        return self._state_init_params
 
     @property
     def fitted_landmark_params(self) -> Mapping[tuple[str, int], LandmarkStandardization]:
@@ -736,7 +772,11 @@ class PatientDatasetBuilder:
                 `patient_id` (Requirement 1.8), or on an unusable event time
                 (Requirement 1.10). Nothing partial is emitted in any case.
         """
-        if self._baseline_params is None or self._landmark_params is None:
+        if (
+            self._baseline_params is None
+            or self._landmark_params is None
+            or self._state_init_params is None
+        ):
             raise DatasetBuildError(
                 f"build(split_name={split_name!r}) was called before fit(); "
                 "call fit(dev_records) on the Development_Split first. build() "
@@ -762,11 +802,13 @@ class PatientDatasetBuilder:
         intervention_rows: list[list[float]] = []
         bin_indices: list[int] = []
         censoring_flags: list[bool] = []
+        event_flags: list[bool] = []
+        event_times_weeks: list[float] = []
 
         for record in ordered:
             patient_ids.append(record.patient_id)
             baseline_rows.append(_sanitized(_feature_vector(record, self._baseline_params)))
-            state_init_rows.append(_sanitized(extract_baseline_vector(record)))
+            state_init_rows.append(_standardized_state_init(record, self._state_init_params))
 
             cd4_row, cd4_mask_row = self._standardized_landmarks(record, CD4_LAB_CONCEPT_ID)
             cd8_row, cd8_mask_row = self._standardized_landmarks(record, CD8_LAB_CONCEPT_ID)
@@ -782,6 +824,8 @@ class PatientDatasetBuilder:
             bin_index = survival_bin_index(elapsed_by_id[record.patient_id])
             bin_indices.append(bin_index)
             censoring_flags.append(_censored_before_bin_start(record, bin_index))
+            event_flags.append(bool(record.endpoint_result.event_indicator))
+            event_times_weeks.append(elapsed_by_id[record.patient_id])
 
         return TensorBatch(
             split_name=split_name,
@@ -797,6 +841,8 @@ class PatientDatasetBuilder:
             intervention=torch.tensor(intervention_rows, dtype=FLOAT_DTYPE),
             bin_index=torch.tensor(bin_indices, dtype=torch.int64),
             censoring_mask=torch.tensor(censoring_flags, dtype=torch.bool),
+            event_indicator=torch.tensor(event_flags, dtype=torch.bool),
+            event_time_weeks=torch.tensor(event_times_weeks, dtype=FLOAT_DTYPE),
             dimensions=self.dimensions,
         )
 
@@ -850,3 +896,51 @@ def _sanitized(values: Sequence[float]) -> list[float]:
     two modules already use for an unusable covariate -- not a new sentinel.
     """
     return [value if math.isfinite(value) else MISSING_PLACEHOLDER for value in values]
+
+
+def _fit_state_init_standardization(
+    dev_records: Sequence[PatientRecord],
+) -> tuple[LandmarkStandardization, ...]:
+    """Development-fitted `(mean, stdev)` per baseline-state-init column.
+
+    `extract_baseline_vector` returns raw clinical scales (baseline CD4 in
+    the hundreds, CD8 near a thousand, Karnofsky near 90, age in years).
+    Fed unscaled into `tanh(Linear(state_init))`, those saturate the
+    activation to exactly `+/-1.0` in float32, so the intervention-aware
+    model's state encoder receives an exactly-zero gradient and cannot
+    learn (found by task 10.3's gradient-flow test). The columns are
+    therefore z-scored with parameters fitted here, on Development_Split
+    rows only, and applied unchanged by `build` to every split
+    (Requirement 1.4; `decisions.md` Section 10 step 4 "fit all
+    preprocessing transformations ... on the development split only").
+
+    Fitted over the vectors exactly as they would otherwise be emitted
+    (after `_sanitized`), so what is standardized is what the model used to
+    see. Population standard deviation, as the landmark columns use.
+    """
+    rows = [_sanitized(extract_baseline_vector(record)) for record in dev_records]
+    params: list[LandmarkStandardization] = []
+    for column_index in range(len(BASELINE_STATE_INIT_FIELDS)):
+        column = [row[column_index] for row in rows]
+        mean = statistics.fmean(column)
+        stdev = statistics.pstdev(column) if len(column) > 1 else 0.0
+        params.append(LandmarkStandardization(mean=mean, stdev=stdev))
+    return tuple(params)
+
+
+def _standardized_state_init(
+    record: PatientRecord, params: tuple[LandmarkStandardization, ...] | None
+) -> list[float]:
+    """One patient's z-scored baseline-state-init vector.
+
+    A zero-stdev column standardizes to `0.0` rather than dividing by zero,
+    mirroring `causal.propensity._standardized_value` and
+    `_standardized_landmarks`.
+    """
+    assert params is not None  # guarded by build()
+    raw = _sanitized(extract_baseline_vector(record))
+    standardized = [
+        (value - column.mean) / column.stdev if column.stdev > 0.0 else 0.0
+        for value, column in zip(raw, params, strict=True)
+    ]
+    return _sanitized(standardized)

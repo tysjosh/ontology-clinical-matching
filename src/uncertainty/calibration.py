@@ -53,9 +53,11 @@ Metrics computed
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from causal.solvers import SolverConvergenceError
 from evaluation.metrics import calibration_slope_intercept
 
 #: Default number of equal-width bins over [0, 1] for the reliability diagram.
@@ -123,7 +125,9 @@ class CalibrationResult:
         calibration_intercept: from
             `evaluation.metrics.calibration_slope_intercept`.
         calibration_slope: from
-            `evaluation.metrics.calibration_slope_intercept`.
+            `evaluation.metrics.calibration_slope_intercept`; NaN (with the
+            intercept) when the predictions perfectly separate the labels
+            and the calibration model has no finite fit.
         reliability_diagram: one `(mean_predicted, mean_observed, count)`
             tuple per non-empty bin, in bin order (see module docstring).
     """
@@ -213,7 +217,14 @@ class Calibrator:
         labels = validation_data.labels
 
         brier = _brier_score(predictions, labels)
-        intercept, slope = calibration_slope_intercept(predictions, labels)
+        try:
+            intercept, slope = calibration_slope_intercept(predictions, labels)
+        except SolverConvergenceError:
+            # The predicted logits perfectly separate the labels: the
+            # calibration slope is unbounded, so it is reported as undefined
+            # (NaN) rather than as the arbitrary finite number a fixed-budget
+            # fit would stop at.
+            intercept, slope = math.nan, math.nan
         diagram = _reliability_diagram(predictions, labels, self.n_bins)
 
         self._result = CalibrationResult(

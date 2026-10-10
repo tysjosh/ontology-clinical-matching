@@ -1,0 +1,15 @@
+{
+  "id": "INV-000",
+  "type": "investigation",
+  "description": "Shared harness: canonical dev-retained cohort, 5 folds, shipped 14-column encoding, asserting n=383 and arms 201/182. Plan item 1.",
+  "status": "completed",
+  "steps": [
+    "Plan item 1"
+  ],
+  "outputs": [
+    "scripts/harness.py"
+  ],
+  "findings": [
+    "Canonical cohort reproduced: n=383, arms {1: 201, 0: 182}, 14 encoded columns, 0.48 s."
+  ]
+}
