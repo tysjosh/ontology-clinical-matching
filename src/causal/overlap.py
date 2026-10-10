@@ -60,24 +60,43 @@ inverse-propensity weights `w_i = 1/e_i` for arm-1 patients and
 `w_i = 1/(1-e_i)` for arm-0 patients (unstabilized, unclipped -- this
 module's job is diagnostics, not the primary estimator's weighting scheme).
 
-Standardized mean difference (SMD)
--------------------------------------
+Standardized mean difference (SMD): what the third condition gates on
+-----------------------------------------------------------------------
 
-Per covariate in `adjustment_set`, the pooled-SD SMD:
+`decisions.md` Section 26 (2026-09-30 amendment; task 7.6) fixes how Section
+12's "every **adjusted** baseline covariate" is computed:
 
-    SMD = (mean_1 - mean_0) / sqrt((var_1 + var_0) / 2)
+- **Weighted basis.** `smd_by_covariate`, the only SMD `smd_sufficient`
+  reads, is computed under **stabilized inverse-probability weights**:
+  `P(A=1)/e` for arm 1 and `P(A=0)/(1-e)` for arm 0, with the marginal
+  prevalences taken from `patients`, clipped with the frozen Section 11
+  `"primary"` 1st/99th-percentile preset through
+  `causal.weighting.clip_weights`. Weighted means are `sum(w x) / sum(w)`;
+  weighted variances are the reliability-weighted analogue of `ddof=1`
+  (denominator `sum(w) - sum(w^2)/sum(w)`), so with all weights equal to 1
+  they reduce exactly to the raw computation. Pooled-SD form:
+  `SMD = (mean_1 - mean_0) / sqrt((var_1 + var_0) / 2)`.
+- **Full adjustment set, one shared encoding.** Each `adjustment_set` name
+  that is a Section 13 covariate is read through `causal.adjustment_set`
+  (stored-key resolution such as `weight` -> `weight_kg`) and contributes
+  one entry per encoded column: continuous values on their raw scale,
+  booleans as 1/0, binary categories as 1 for the non-reference level and
+  0 for the reference level, prior ART as an exposure indicator plus a
+  duration. Names outside Section 13 are read as raw numerics. A missing
+  or unusable value is excluded from that column's moments, never
+  defaulted to `0.0`.
+- **No silent omission.** A column with no observed value in one arm cannot
+  be balance-checked. It gets an entry in `smd_exclusions` naming the
+  reason, and it **counts as not balanced**: `smd_sufficient` requires
+  `smd_exclusions` to be empty.
+- **Raw SMDs are descriptive only.** `raw_smd_by_covariate` holds the same
+  columns' unweighted SMDs. Section 9 deliberately induces raw imbalance,
+  so this field is reported, labelled raw, and never gated on.
 
-Raw covariate values are read from `PatientRecord.timeline.static_covariates`
-and coerced to `float`; a missing or non-numeric value for a given patient
-is excluded from that covariate's mean/variance computation (never
-defaulted to `0.0`, which would silently distort the balance check). Sample
-variance (`statistics.variance`, i.e. `ddof=1`) is used when an arm has at
-least two observed values for a covariate; an arm with fewer than two
-observed values contributes a variance of `0.0` for that covariate. If both
-arms have zero variance and equal means, SMD is defined as `0.0` (no
-imbalance to report); if the pooled SD is `0.0` but the means differ, SMD is
-reported as `float("inf")` (an unambiguous imbalance signal rather than a
-`ZeroDivisionError`).
+Degenerate cases (both bases): an arm with fewer than two observed values
+contributes variance `0.0`; zero pooled SD with equal means gives SMD `0.0`;
+zero pooled SD with different means gives `float("inf")`, which fails the
+gate.
 """
 
 from __future__ import annotations
@@ -87,6 +106,12 @@ import statistics
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
+from causal.adjustment_set import (
+    ADJUSTMENT_COVARIATES_BY_NAME,
+    AdjustmentCovariate,
+    resolve_raw_value,
+)
+from causal.weighting import clip_weights
 from cohorts.cohort_construction import PatientRecord
 
 #: `decisions.md` Section 12 -- primary common-support band.
@@ -105,6 +130,13 @@ MIN_EFFECTIVE_SAMPLE_SIZE: float = 100.0
 
 #: `decisions.md` Section 12 -- maximum absolute SMD for every adjusted covariate.
 MAX_ABS_SMD: float = 0.10
+
+#: `decisions.md` Section 26 (2026-09-30): the clipping preset for the
+#: weighted-SMD basis (Section 11's frozen `"primary"` 1st/99th percentile).
+SMD_WEIGHT_CLIP_PRESET: str = "primary"
+
+#: Recorded in `OverlapReport.smd_basis`.
+SMD_BASIS: str = "stabilized_ipw_clipped_primary_1_99"
 
 #: The two retained treatment arms (mirrors `cohort_construction.RETAINED_ARMS`).
 _ARM_1_INTERVENTION = 1
@@ -146,15 +178,21 @@ class OverlapReport:
         extreme_weight_fraction: `extreme_weight_count / len(patients)`
             (`0.0` if `patients` is empty).
         ess_by_arm: `{arm: effective sample size}`.
-        smd_by_covariate: `{covariate name: signed SMD}`, one entry per
-            `adjustment_set` field that has at least one observed value in
-            each arm; a field observed in neither/only one arm is omitted
-            (there is no balance to compute).
+        smd_by_covariate: `{encoded column: signed weighted SMD}` on the
+            stabilized-IPW basis (module docstring). The quantity the third
+            frozen condition gates on.
         arm_counts_sufficient: both arms retain >= `MIN_ARM_COUNT` patients.
         ess_sufficient: both arms' ESS >= `MIN_EFFECTIVE_SAMPLE_SIZE`.
-        smd_sufficient: every computed SMD has `abs(smd) < MAX_ABS_SMD`.
+        smd_sufficient: `smd_exclusions` is empty and every weighted SMD
+            has `abs(smd) < MAX_ABS_SMD`.
         no_unresolved_positivity_warning: `extreme_weight_count == 0`.
         support_valid: all four conditions above.
+        raw_smd_by_covariate: the same columns' unweighted SMDs. Descriptive
+            only; never read by `smd_sufficient` or `support_valid`.
+        smd_exclusions: `{encoded column: reason}` for every column that
+            could not be balance-checked. Each one makes `smd_sufficient`
+            false.
+        smd_basis: the weighting basis of `smd_by_covariate`.
     """
 
     arm_counts: dict[int, int]
@@ -169,6 +207,9 @@ class OverlapReport:
     smd_sufficient: bool
     no_unresolved_positivity_warning: bool
     support_valid: bool = field(default=False)
+    raw_smd_by_covariate: dict[str, float] = field(default_factory=dict)
+    smd_exclusions: dict[str, str] = field(default_factory=dict)
+    smd_basis: str = SMD_BASIS
 
 
 def _propensity_for(patient: PatientRecord, propensities: Mapping[str, float]) -> float:
@@ -230,6 +271,127 @@ def _smd(values_1: Sequence[float], values_0: Sequence[float]) -> float | None:
     return (mean_1 - mean_0) / pooled_sd
 
 
+def _weighted_mean(values: Sequence[float], weights: Sequence[float]) -> float:
+    return sum(v * w for v, w in zip(values, weights, strict=True)) / sum(weights)
+
+
+def _weighted_variance(values: Sequence[float], weights: Sequence[float]) -> float:
+    """Reliability-weighted variance; equals `statistics.variance` at unit weights."""
+    if len(values) < 2:
+        return 0.0
+    mean = _weighted_mean(values, weights)
+    sum_w = sum(weights)
+    denominator = sum_w - sum(w * w for w in weights) / sum_w
+    if denominator <= 0.0:
+        return 0.0
+    return sum(w * (v - mean) ** 2 for v, w in zip(values, weights, strict=True)) / denominator
+
+
+def _weighted_smd(
+    values_1: Sequence[float],
+    weights_1: Sequence[float],
+    values_0: Sequence[float],
+    weights_0: Sequence[float],
+) -> float:
+    """Pooled-SD SMD under weights, with the same degenerate cases as `_smd`.
+
+    Values are first shifted by a common constant (the first observed
+    value). The SMD is shift-invariant, and the shift makes a constant
+    column exactly zero, so it cannot produce a spurious SMD from rounding
+    in `sum(w x) / sum(w)` (variance ~1e-26 against a mean difference of
+    one ulp).
+    """
+    shift = values_1[0]
+    values_1 = [v - shift for v in values_1]
+    values_0 = [v - shift for v in values_0]
+    mean_1 = _weighted_mean(values_1, weights_1)
+    mean_0 = _weighted_mean(values_0, weights_0)
+    pooled_sd = math.sqrt(
+        (_weighted_variance(values_1, weights_1) + _weighted_variance(values_0, weights_0)) / 2.0
+    )
+    if pooled_sd == 0.0:
+        return 0.0 if mean_1 == mean_0 else float("inf")
+    return (mean_1 - mean_0) / pooled_sd
+
+
+def _stabilized_clipped_weights(
+    patients: Sequence[PatientRecord], propensities: Mapping[str, float]
+) -> dict[str, float]:
+    """Stabilized IPW weights for arms 0/1, clipped with the frozen primary preset."""
+    in_arms = [p for p in patients if p.treatment_arm in (_ARM_0_COMPARATOR, _ARM_1_INTERVENTION)]
+    if not in_arms:
+        return {}
+    p_treated = sum(1 for p in in_arms if p.treatment_arm == _ARM_1_INTERVENTION) / len(in_arms)
+    unclipped: dict[str, float] = {}
+    for patient in in_arms:
+        e = _propensity_for(patient, propensities)
+        if patient.treatment_arm == _ARM_1_INTERVENTION:
+            unclipped[patient.patient_id] = p_treated / e if e > 0.0 else math.inf
+        else:
+            unclipped[patient.patient_id] = (1.0 - p_treated) / (1.0 - e) if e < 1.0 else math.inf
+    clipped = clip_weights(unclipped, SMD_WEIGHT_CLIP_PRESET)
+    assert isinstance(clipped, dict)
+    return clipped
+
+
+def _to_float(raw_value: object) -> float | None:
+    if raw_value is None:
+        return None
+    try:
+        value = float(raw_value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    return value if math.isfinite(value) else None
+
+
+def _section_13_column_values(
+    patient: PatientRecord, covariate: AdjustmentCovariate
+) -> list[float | None]:
+    """One value per encoded column of `covariate`, `None` where missing.
+
+    Raw scale for continuous columns. Missing values stay `None` (unlike the
+    propensity encoding, which fills them), so they are excluded from the
+    balance moments rather than counted as zero.
+    """
+    raw = resolve_raw_value(patient.timeline.static_covariates, covariate)
+    if covariate.encoding == "continuous":
+        return [_to_float(raw)]
+    if covariate.encoding == "boolean":
+        return [None if raw is None else (1.0 if bool(raw) else 0.0)]
+    if covariate.encoding == "binary_category":
+        if not isinstance(raw, str):
+            return [None]
+        if covariate.allowed_levels is not None and raw not in covariate.allowed_levels:
+            return [None]
+        return [0.0 if raw == covariate.reference_level else 1.0]
+    duration = None
+    for concept_id in covariate.concept_ids:
+        duration = _to_float(patient.timeline.static_covariates.get(concept_id))
+        if duration is not None:
+            break
+    if duration is None:
+        return [None, None]
+    return [1.0 if duration > 0 else 0.0, duration]
+
+
+def _balance_columns(patient: PatientRecord, name: str) -> list[tuple[str, float | None]]:
+    """`[(column, value or None)]` for one `adjustment_set` name."""
+    covariate = ADJUSTMENT_COVARIATES_BY_NAME.get(name)
+    if covariate is None:
+        return [(name, _raw_numeric_covariate(patient, name))]
+    return list(zip(covariate.columns, _section_13_column_values(patient, covariate), strict=True))
+
+
+def _column_order(adjustment_set: Sequence[str]) -> list[str]:
+    order: list[str] = []
+    for name in adjustment_set:
+        covariate = ADJUSTMENT_COVARIATES_BY_NAME.get(name)
+        for column in covariate.columns if covariate is not None else (name,):
+            if column not in order:
+                order.append(column)
+    return order
+
+
 class OverlapDiagnostics:
     """Overlap and support diagnostics for a cohort's propensity scores.
 
@@ -269,9 +431,12 @@ class OverlapDiagnostics:
         arm_counts: dict[int, int] = {}
         propensity_by_arm: dict[int, list[float]] = {}
         weights_by_arm: dict[int, list[float]] = {}
-        covariate_values_by_arm: dict[int, dict[str, list[float]]] = {
-            _ARM_0_COMPARATOR: {name: [] for name in adjustment_set},
-            _ARM_1_INTERVENTION: {name: [] for name in adjustment_set},
+        columns = _column_order(adjustment_set)
+        smd_weights = _stabilized_clipped_weights(patients, propensities)
+        # {arm: {column: [(value, weight)]}}
+        covariate_values_by_arm: dict[int, dict[str, list[tuple[float, float]]]] = {
+            _ARM_0_COMPARATOR: {column: [] for column in columns},
+            _ARM_1_INTERVENTION: {column: [] for column in columns},
         }
 
         primary_count = 0
@@ -304,10 +469,11 @@ class OverlapDiagnostics:
                 weights_by_arm.setdefault(arm, []).append(weight)
 
             if arm in covariate_values_by_arm:
-                for field_name in adjustment_set:
-                    value = _raw_numeric_covariate(patient, field_name)
-                    if value is not None:
-                        covariate_values_by_arm[arm][field_name].append(value)
+                weight_for_smd = smd_weights[patient.patient_id]
+                for name in adjustment_set:
+                    for column, value in _balance_columns(patient, name):
+                        if value is not None:
+                            covariate_values_by_arm[arm][column].append((value, weight_for_smd))
 
         n_patients = len(patients)
         arm_propensity_summary = {
@@ -324,12 +490,30 @@ class OverlapDiagnostics:
         }
 
         smd_by_covariate: dict[str, float] = {}
-        for field_name in adjustment_set:
-            values_1 = covariate_values_by_arm[_ARM_1_INTERVENTION][field_name]
-            values_0 = covariate_values_by_arm[_ARM_0_COMPARATOR][field_name]
-            smd = _smd(values_1, values_0)
-            if smd is not None:
-                smd_by_covariate[field_name] = smd
+        raw_smd_by_covariate: dict[str, float] = {}
+        smd_exclusions: dict[str, str] = {}
+        for column in columns:
+            pairs_1 = covariate_values_by_arm[_ARM_1_INTERVENTION][column]
+            pairs_0 = covariate_values_by_arm[_ARM_0_COMPARATOR][column]
+            if not pairs_1 or not pairs_0:
+                empty = [
+                    str(arm)
+                    for arm, pairs in ((_ARM_1_INTERVENTION, pairs_1), (_ARM_0_COMPARATOR, pairs_0))
+                    if not pairs
+                ]
+                smd_exclusions[column] = (
+                    f"no observed value in arm {' and arm '.join(empty)}; balance cannot be "
+                    "checked, so the covariate is not counted as balanced"
+                )
+                continue
+            values_1 = [v for v, _ in pairs_1]
+            values_0 = [v for v, _ in pairs_0]
+            raw = _smd(values_1, values_0)
+            assert raw is not None
+            raw_smd_by_covariate[column] = raw
+            smd_by_covariate[column] = _weighted_smd(
+                values_1, [w for _, w in pairs_1], values_0, [w for _, w in pairs_0]
+            )
 
         arm_counts_sufficient = (
             arm_counts.get(_ARM_0_COMPARATOR, 0) >= MIN_ARM_COUNT
@@ -339,7 +523,9 @@ class OverlapDiagnostics:
             ess_by_arm.get(_ARM_0_COMPARATOR, 0.0) >= MIN_EFFECTIVE_SAMPLE_SIZE
             and ess_by_arm.get(_ARM_1_INTERVENTION, 0.0) >= MIN_EFFECTIVE_SAMPLE_SIZE
         )
-        smd_sufficient = all(abs(smd) < MAX_ABS_SMD for smd in smd_by_covariate.values())
+        smd_sufficient = not smd_exclusions and all(
+            abs(smd) < MAX_ABS_SMD for smd in smd_by_covariate.values()
+        )
         no_unresolved_positivity_warning = extreme_weight_count == 0
 
         support_valid = (
@@ -362,4 +548,7 @@ class OverlapDiagnostics:
             smd_sufficient=smd_sufficient,
             no_unresolved_positivity_warning=no_unresolved_positivity_warning,
             support_valid=support_valid,
+            raw_smd_by_covariate=raw_smd_by_covariate,
+            smd_exclusions=smd_exclusions,
+            smd_basis=SMD_BASIS,
         )

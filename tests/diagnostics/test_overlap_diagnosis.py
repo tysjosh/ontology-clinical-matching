@@ -1,6 +1,15 @@
 """Diagnostic: is the overlap SMD failure a raw-balance measurement or an
 adjustment failure? (task 7.2 of `.kiro/specs/neural-experiment-pipeline`).
 
+Status after task 7.6. Task 7.2 found that `causal.overlap` gated on RAW
+balance although Section 12 says "adjusted"; the Section 26 amendment of
+2026-09-30 fixed the basis, and task 7.6 implemented it. The module below was
+kept as the evidence generator and now checks the implementation against an
+independent recomputation instead: `OverlapReport.raw_smd_by_covariate`
+must equal a local unweighted SMD, and `OverlapReport.smd_by_covariate` (the
+gated value) a local stabilized-IPW SMD, on every column whose stored key is
+its Section 13 name. The historical description of task 7.2 follows.
+
 `decisions.md` Section 12's third frozen condition reads "every **adjusted**
 baseline covariate has absolute standardized mean difference < 0.10", but
 `causal.overlap._smd` takes only two value sequences and no weights, and reads
@@ -263,9 +272,24 @@ class _Diagnosis:
             self.dev_patients, self.propensities, self.adjustment_set
         )
         self.weights = _stabilized_ipw_weights(self.dev_patients, self.propensities)
-        self.raw_smd: dict[str, float] = dict(self.report.smd_by_covariate)
-        self.weighted_smd = _weighted_smd_by_covariate(
-            self.dev_patients, self.weights, self.adjustment_set
+        # Since task 7.6 the report carries both: the gated weighted SMDs and
+        # the descriptive raw ones, keyed by encoded column.
+        self.raw_smd: dict[str, float] = dict(self.report.raw_smd_by_covariate)
+        self.weighted_smd: dict[str, float] = dict(self.report.smd_by_covariate)
+        # Independent local recomputation over names that are their own
+        # stored key (no Section 13 key remapping or category encoding).
+        self.directly_keyed = [
+            name
+            for name in self.adjustment_set
+            if name in self.raw_smd and _numeric_covariate(self.dev_patients[0], name) is not None
+        ]
+        self.local_weighted_smd = _weighted_smd_by_covariate(
+            self.dev_patients, self.weights, self.directly_keyed
+        )
+        self.local_raw_smd = _weighted_smd_by_covariate(
+            self.dev_patients,
+            {patient.patient_id: 1.0 for patient in self.dev_patients},
+            self.directly_keyed,
         )
 
     def as_payload(self) -> dict[str, object]:
@@ -288,14 +312,13 @@ class _Diagnosis:
                 "no_unresolved_positivity_warning": (self.report.no_unresolved_positivity_warning),
                 "support_valid": self.report.support_valid,
             },
-            "smd_raw": dict(sorted(self.raw_smd.items())),
-            "smd_stabilized_ipw_weighted": dict(sorted(self.weighted_smd.items())),
+            "smd_basis": self.report.smd_basis,
+            "smd_raw_descriptive_only": dict(sorted(self.raw_smd.items())),
+            "smd_stabilized_ipw_weighted_gated": dict(sorted(self.weighted_smd.items())),
             "offending_covariates_raw": _offenders(self.raw_smd),
             "offending_covariates_weighted": _offenders(self.weighted_smd),
-            "adjustment_set_covariates_not_modeled": sorted(set(self.raw_smd) - modeled),
-            "adjustment_set_covariates_omitted_from_balance_check": sorted(
-                set(self.adjustment_set) - set(self.raw_smd)
-            ),
+            "balance_columns_not_in_propensity_model": sorted(set(self.weighted_smd) - modeled),
+            "smd_exclusions": dict(sorted(self.report.smd_exclusions.items())),
             "weight_summary": {
                 "minimum": min(self.weights.values()),
                 "maximum": max(self.weights.values()),
@@ -330,53 +353,38 @@ def diagnosis_task_text_seed_path() -> _Diagnosis:
 # --------------------------------------------------------------------------
 
 
-def test_overlap_smd_is_raw_unweighted_balance(diagnosis: _Diagnosis) -> None:
-    """`OverlapReport.smd_by_covariate` reproduces exactly under an unweighted
-    recomputation, and does not reproduce under the weighted one -- so the
-    frozen condition measures RAW balance, not adjusted balance."""
-    unit_weights = {patient.patient_id: 1.0 for patient in diagnosis.dev_patients}
-    recomputed_unweighted = _weighted_smd_by_covariate(
-        diagnosis.dev_patients, unit_weights, diagnosis.adjustment_set
-    )
-
-    assert recomputed_unweighted.keys() == diagnosis.raw_smd.keys()
-    for name, reported in diagnosis.raw_smd.items():
-        assert recomputed_unweighted[name] == pytest.approx(reported, rel=1e-12, abs=1e-12)
-
-    # And the weighted quantity is materially different for the covariates the
-    # propensity model adjusts for -- confirming the report is not already
-    # weighted by some other route.
-    assert any(
-        abs(diagnosis.weighted_smd[name] - diagnosis.raw_smd[name]) > 1e-6
-        for name in diagnosis.raw_smd
-    )
-
-
-def test_weighting_resolves_imbalance_only_for_modeled_covariates(
+def test_report_raw_and_gated_smds_match_independent_recomputation(
     diagnosis: _Diagnosis,
 ) -> None:
-    """Every raw offender that the propensity model actually adjusts for falls
-    below the frozen 0.10 threshold once stabilized IPW weights are applied;
-    any residual offender is a covariate absent from `COVARIATE_FIELDS`."""
-    modeled = set(COVARIATE_FIELDS)
+    """Task 7.2 established that the gate read raw balance (an unweighted
+    recomputation reproduced `smd_by_covariate` to 1e-12). After task 7.6 the
+    raw SMDs live in `raw_smd_by_covariate` (descriptive) and
+    `smd_by_covariate` is the stabilized-IPW value the gate reads. Both are
+    checked here against this module's own moment code."""
+    assert len(diagnosis.directly_keyed) >= 8
+    for name in diagnosis.directly_keyed:
+        assert diagnosis.raw_smd[name] == pytest.approx(
+            diagnosis.local_raw_smd[name], rel=1e-9, abs=1e-12
+        ), name
+        assert diagnosis.weighted_smd[name] == pytest.approx(
+            diagnosis.local_weighted_smd[name], rel=1e-9, abs=1e-12
+        ), name
+    assert diagnosis.report.smd_basis == "stabilized_ipw_clipped_primary_1_99"
+
+
+def test_every_raw_offender_is_balanced_after_weighting(diagnosis: _Diagnosis) -> None:
+    """On the canonical path, with the converged Section 13 propensity model,
+    every column that fails raw balance passes under stabilized IPW, and no
+    column fails weighted balance or is excluded. Before task 7.5 the one
+    residual weighted offender was `baseline_cd8` (-0.1323), which the
+    six-covariate model did not include; it is now -0.0021."""
     raw_offenders = _offenders(diagnosis.raw_smd)
-    weighted_offenders = _offenders(diagnosis.weighted_smd)
-
-    assert raw_offenders, "expected the documented raw SMD failure to reproduce"
-
+    assert raw_offenders, "expected the designed raw imbalance to reproduce"
     for name in raw_offenders:
-        if name in modeled:
-            assert abs(diagnosis.weighted_smd[name]) < MAX_ABS_SMD, (
-                f"{name} is in the propensity model's COVARIATE_FIELDS but is "
-                f"still imbalanced after weighting "
-                f"(weighted SMD {diagnosis.weighted_smd[name]:.4f})"
-            )
-
-    for name in weighted_offenders:
-        assert name not in modeled, (
-            f"{name} remains imbalanced after weighting despite being modeled; "
-            "that would be an adjustment failure, not a measurement-basis issue"
-        )
+        assert abs(diagnosis.weighted_smd[name]) < MAX_ABS_SMD, name
+    assert _offenders(diagnosis.weighted_smd) == []
+    assert diagnosis.report.smd_exclusions == {}
+    assert set(diagnosis.weighted_smd) == set(COVARIATE_FIELDS)
 
 
 # --------------------------------------------------------------------------
@@ -385,20 +393,17 @@ def test_weighting_resolves_imbalance_only_for_modeled_covariates(
 
 
 def test_frozen_conditions_reproduce_as_measured(diagnosis: _Diagnosis) -> None:
-    """Records which of the four frozen conditions pass on the canonical path.
+    """The four frozen conditions on the canonical path after task 7.6.
 
-    Before task 7.5 (six-covariate propensity model) only `smd_sufficient`
-    failed; `no_unresolved_positivity_warning` was True
-    (`extreme_weight_count == 0`). With the Section 13 propensity model
-    (task 7.5) one arm-0 patient has e = 0.9305 > 0.90, so
-    `no_unresolved_positivity_warning` is now False as well
-    (`extreme_weight_count == 1`). `smd_sufficient` is still the raw-basis
-    gate here; task 7.6 moves it to the weighted basis."""
+    History: before task 7.5 only `smd_sufficient` failed (raw basis). Task
+    7.5 added a positivity failure (one arm-0 patient above 0.90). After 7.6
+    `smd_sufficient` is True on the weighted basis, so positivity is the only
+    failing condition, and `support_valid` stays False."""
     report = diagnosis.report
 
     assert report.arm_counts_sufficient is True
     assert report.ess_sufficient is True
-    assert report.smd_sufficient is False
+    assert report.smd_sufficient is True
     assert report.no_unresolved_positivity_warning is False
     assert report.support_valid is False
 
@@ -418,23 +423,22 @@ def test_writes_diagnostic_artifact(
         "diagnostic": "overlap_smd_raw_vs_weighted",
         "spec_task": ".kiro/specs/neural-experiment-pipeline/tasks.md task 7.2",
         "diagnostic_only": (
-            "No frozen threshold, condition, band, or causal/overlap.py::_smd was "
-            "changed. The proposed remedy is NOT applied; see the proposal file "
-            "named in 'proposed_amendment_path'."
+            "No frozen threshold, condition or band was changed. The SMD-basis "
+            "amendment (decisions.md Section 26, 2026-09-30) was applied by task "
+            "7.4 and implemented by task 7.6: the gate now reads stabilized-IPW "
+            "SMDs over the full Section 13 adjustment set."
         ),
         "proposed_amendment_path": PROPOSED_AMENDMENT_PATH,
         "master_seed": MASTER_SEED,
         "n_folds": N_FOLDS,
         "clip_preset": CLIP_PRESET,
         "max_abs_smd_threshold": MAX_ABS_SMD,
-        "smd_measurement_basis": "raw_unweighted",
-        "smd_measurement_basis_evidence": (
-            "causal/overlap.py::_smd takes two value sequences and no weights, "
-            "and its inputs come from raw PatientRecord.timeline.static_covariates "
-            "reads. An unweighted recomputation reproduces "
-            "OverlapReport.smd_by_covariate to within 1e-12; the weighted "
-            "recomputation does not. decisions.md Section 12 words the condition "
-            "as 'adjusted'."
+        "smd_measurement_basis": "stabilized_ipw_clipped_primary_1_99",
+        "smd_measurement_basis_history": (
+            "Task 7.2 found the gate read raw, unweighted SMDs although Section 12 "
+            "says 'adjusted'. Since task 7.6 OverlapReport.smd_by_covariate is the "
+            "stabilized-IPW SMD (gated) and raw_smd_by_covariate is descriptive "
+            "only; both match an independent recomputation in this module."
         ),
         "propensity_model_covariate_fields": list(COVARIATE_FIELDS),
         "n_discrepancy": {
@@ -456,15 +460,14 @@ def test_writes_diagnostic_artifact(
         "canonical_seed_path": canonical,
         "task_text_seed_path": task_text_path,
         "verdict": (
-            "Benchmark working as designed, on both seed paths. Every raw SMD "
-            "offender that the propensity model actually adjusts for falls below "
-            "the frozen 0.10 threshold under stabilized IPW. The sole residual "
-            "offender is baseline_cd8, which is absent from "
-            "causal.propensity.COVARIATE_FIELDS and cannot be added because "
-            "decisions.md Section 11.3 forbids adjusting for the negative-control "
-            "outcome. This is not an adjustment failure; the frozen condition "
-            "measures raw balance while Section 9 deliberately induces raw "
-            "imbalance on six named covariates."
+            "Benchmark working as designed, on both seed paths. Section 9 induces "
+            "raw imbalance (raw |SMD| up to about 0.37); with the converged Section "
+            "13 propensity model every column falls below the frozen 0.10 "
+            "threshold under stabilized IPW, so the third condition passes. "
+            "Earlier, under the six-covariate model, baseline_cd8 stayed "
+            "imbalanced because that model omitted it; task 7.2 read Section 11.3 "
+            "as forbidding it, which was a misreading (11.3 excludes CD8 only from "
+            "the negative-control regression)."
         ),
     }
 
@@ -472,10 +475,10 @@ def test_writes_diagnostic_artifact(
     ARTIFACT_PATH.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 
     reloaded = json.loads(ARTIFACT_PATH.read_text(encoding="utf-8"))
-    assert reloaded["smd_measurement_basis"] == "raw_unweighted"
+    assert reloaded["smd_measurement_basis"] == "stabilized_ipw_clipped_primary_1_99"
     assert reloaded["canonical_seed_path"]["offending_covariates_raw"]
-    assert reloaded["canonical_seed_path"]["frozen_conditions"]["smd_sufficient"] is False
-    assert reloaded["task_text_seed_path"]["frozen_conditions"]["smd_sufficient"] is False
+    assert reloaded["canonical_seed_path"]["offending_covariates_weighted"] == []
+    assert reloaded["canonical_seed_path"]["frozen_conditions"]["smd_sufficient"] is True
     assert reloaded["n_discrepancy"]["agrees"] is False
 
 
@@ -504,19 +507,11 @@ def test_task_text_numbers_come_from_the_underived_seed_path(
 def test_verdict_is_stable_across_both_seed_paths(
     diagnosis: _Diagnosis, diagnosis_task_text_seed_path: _Diagnosis
 ) -> None:
-    """The conclusion does not depend on which seed path is canonical. On both,
-    the frozen raw-balance condition fails, and on both, every residual
-    post-weighting offender is a covariate the propensity model does not adjust
-    for (on the un-derived path there are none at all)."""
-    modeled = set(COVARIATE_FIELDS)
+    """The conclusion does not depend on which seed path is canonical: on
+    both, the designed raw imbalance is present and no column remains
+    imbalanced after stabilized IPW with the Section 13 propensity model."""
     for measurement in (diagnosis, diagnosis_task_text_seed_path):
-        assert measurement.report.smd_sufficient is False
-        assert _offenders(
-            measurement.raw_smd
-        ), f"seed path {measurement.seed_path!r} shows no raw offender"
-        residual = _offenders(measurement.weighted_smd)
-        assert not (set(residual) & modeled), (
-            f"seed path {measurement.seed_path!r} leaves modeled covariates "
-            f"{sorted(set(residual) & modeled)} imbalanced after weighting, which "
-            "would be an adjustment failure rather than a measurement-basis issue"
-        )
+        assert _offenders(measurement.raw_smd), measurement.seed_path
+        assert _offenders(measurement.weighted_smd) == [], measurement.seed_path
+        assert measurement.report.smd_exclusions == {}
+        assert measurement.report.smd_sufficient is True

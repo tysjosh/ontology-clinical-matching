@@ -59,3 +59,9 @@ Read-only investigation on the canonical development cohort (master seed 2024010
 - New defect found while re-measuring: the negative-control-outcome regression dropped five Section 13 covariates (raw-name lookup). Fixed via the shared mapping; classification `uncertain` (-0.1150) -> `pass` (-0.0906), stable over five seeds x {200, 1000} and both seed paths.
 - Still blocking `support_valid`: one arm-0 patient at propensity 0.933 (largest IPW weight, 7.1 before clipping) and the raw-SMD gate pending task 7.6. The prior-ART encoding was deliberately not changed after seeing this.
 - Sealed reference: recomputed in memory by the pipeline (no artifact on disk, no locked evaluation consumed).
+
+## 7. Task 7.6 outcome (2026-10-10)
+
+- The SMD gate now reads stabilized-IPW SMDs over all 14 encoded Section 13 columns. Canonical cohort: raw |SMD| up to 0.374, weighted at most 0.048; `baseline_cd8` -0.136 -> -0.002. The SMD condition passes.
+- `support_valid` is False on positivity alone (one arm-0 patient at e = 0.933).
+- Reported, not adopted: trimming that patient at the primary band would make `support_valid` True, and nobody is outside the [0.05, 0.95] sensitivity band. Choosing either after seeing the result would be post-hoc, so the primary gate stays as frozen.

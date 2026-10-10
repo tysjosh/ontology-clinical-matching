@@ -13,7 +13,13 @@ condition was changed. No code has been changed by 7.2 or 7.4;
 to `decisions.md` Section 26 on 2026-09-30 by task **7.4**. The code changes it
 implies are tracked as tasks **7.5** (propensity-model conformance to Section
 13) and **7.6** (weighted-SMD gate over the full adjustment set). Task 11
-(checkpoint) is not to be run until 7.5-7.6 are complete.
+(checkpoint) was not to be run until 7.5-7.6 were complete.
+
+**Implemented (2026-10-10):** 7.5 and 7.6 are complete, after 7.7-7.9
+made every fit converge. On the canonical cohort every encoded column has
+weighted |SMD| < 0.10 (largest 0.048; `baseline_cd8` -0.002), so the third
+condition passes. `support_valid` stays False on the fourth (positivity)
+condition alone.
 
 The evidence record below (sections "The finding", "Evidence" A and B, and
 "The n discrepancy") is kept as originally written by task 7.2. One claim in
