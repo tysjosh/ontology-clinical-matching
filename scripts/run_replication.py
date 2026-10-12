@@ -305,10 +305,15 @@ def _harness_split_hash(patient_ids: Sequence[str]) -> str:
 
 
 def _neural_risk_difference(
-    ensemble: Any, val_batch: Any
+    ensemble: Any, val_batch: Any, device: str = "cpu"
 ) -> tuple[float | None, dict[str, float | None]]:
     """The intervention-aware ensemble's mean 96-week risk-difference
     recovery on `val_batch`, plus per-patient factual metrics.
+
+    `device` is the device the ensemble's models were trained on
+    (`train_ensemble` leaves them there). `val_batch` is moved onto it
+    before the forward pass, so a CUDA-trained ensemble is never fed CPU
+    tensors.
 
     Returns:
         `(risk_difference_or_None, {"concordance_index": value_or_None})`.
@@ -318,9 +323,12 @@ def _neural_risk_difference(
 
     from evaluation.metrics import concordance_index
     from models.torch_intervention_aware import outcome_from_hazards
+    from models.torch_training import batch_to_device
 
     if len(val_batch.patient_ids) == 0:
         return None, {"concordance_index": None}
+
+    val_batch = batch_to_device(val_batch, device)
 
     arm0_outcomes: list[list[float]] = []
     arm1_outcomes: list[list[float]] = []
@@ -588,7 +596,9 @@ def run_seed(
         checkpoint_dir=checkpoint_dir / "intervention_aware",
     )
 
-    primary_estimate, factual_metrics = _neural_risk_difference(intervention_ensemble, val_batch)
+    primary_estimate, factual_metrics = _neural_risk_difference(
+        intervention_ensemble, val_batch, device=device
+    )
 
     # `uncertainty_valid` has no computed value at this orchestrator's
     # current scope (task 16.1's ensemble/support-gate machinery is not
