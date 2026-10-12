@@ -897,3 +897,163 @@ def aggregate(
         stability_criterion=criterion.criterion_description,
         stability_determination=stability_determination,
     )
+
+
+# ---------------------------------------------------------------------------
+# CLI entry point: five-seed replication on the real ACTG175 data
+# ---------------------------------------------------------------------------
+
+#: Repository root (matches `scripts/run_ablations.py`'s convention).
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+#: Subdirectory a `--verify-determinism` second execution is written to,
+#: under `--results-root`. Kept separate because `run_seed` refuses to
+#: write into a non-empty per-seed directory.
+DETERMINISM_RERUN_DIRNAME = "_determinism_rerun"
+
+
+def build_parser() -> Any:
+    import argparse
+
+    from infra.readiness import REQUIRED_SEEDS
+    from models.torch_training import SUPPORTED_DEVICES
+
+    parser = argparse.ArgumentParser(
+        description=(
+            "Run the five-seed replication (task 18): the full development-stage "
+            "pipeline (split, observationalization, both neural ensembles, the "
+            "three witnesses, the release gate) once per seed on the real "
+            "ACTG175 v3.2 data, then aggregate under the frozen cross-seed "
+            "stability criterion and write replication_summary.json."
+        )
+    )
+    parser.add_argument(
+        "--target-trial-config",
+        type=Path,
+        default=_REPO_ROOT / "configs" / "target_trials" / "main.yaml",
+        help="Target-trial-spec YAML (default: configs/target_trials/main.yaml).",
+    )
+    parser.add_argument(
+        "--real-data-path",
+        type=Path,
+        default=_REPO_ROOT / "data" / "raw" / "actg175_v3_2",
+        help="Directory with the real raw ACTG175 v3.2 CSVs (default: data/raw/actg175_v3_2).",
+    )
+    parser.add_argument(
+        "--results-root",
+        type=Path,
+        default=_REPO_ROOT / "results",
+        help="Root under which replication/ is written (default: results/).",
+    )
+    parser.add_argument(
+        "--seeds",
+        type=int,
+        nargs="+",
+        default=list(REQUIRED_SEEDS),
+        help=f"Replication seeds (default: the five frozen seeds {list(REQUIRED_SEEDS)}).",
+    )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default="cpu",
+        choices=sorted(SUPPORTED_DEVICES),
+        help="Training device for both ensembles (default: cpu).",
+    )
+    parser.add_argument(
+        "--verify-determinism",
+        action="store_true",
+        help=(
+            "Run every seed a second time into "
+            f"<results-root>/{DETERMINISM_RERUN_DIRNAME}/ and record a determinism "
+            "entry in the readiness ledger when the artifact hashes match "
+            "(task 18.2). Raises NonDeterminismError on any mismatch. Doubles runtime."
+        ),
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Load the real data, run `run_seed` for every seed, aggregate, and
+    write `replication_summary.json`. Returns 0 on success, 1 on any error
+    (message on stderr), matching the other `scripts/run_*.py` entry points.
+    """
+    scripts_dir = str(Path(__file__).resolve().parent)
+    if scripts_dir not in sys.path:
+        sys.path.insert(0, scripts_dir)
+
+    import yaml
+
+    from data.loaders.actg175 import Actg175DataNotFoundError, load_actg175
+    from data.loaders.actg175_adapter import raw_tables_to_pipeline_inputs
+    from models.torch_training import resolve_device
+    from protocols.schema import TargetTrialSpec
+
+    args = build_parser().parse_args(argv)
+
+    try:
+        # Fail fast on an unavailable device, before any data is loaded.
+        device = resolve_device(args.device)
+
+        with args.target_trial_config.open("r", encoding="utf-8") as handle:
+            spec = TargetTrialSpec.model_validate(yaml.safe_load(handle))
+
+        tables = load_actg175(args.real_data_path)
+        timelines, treatment_arms, endpoint_results = raw_tables_to_pipeline_inputs(tables)
+        print(
+            f"loaded real ACTG175 data: {len(timelines)} arm-0/1 patients "
+            f"(checksum {tables.checksum_sha256[:12]}...)"
+        )
+
+        def _run(seed: int, root: Path) -> SeedResult:
+            return run_seed(
+                seed,
+                timelines,
+                treatment_arms,
+                spec,
+                root,
+                device=device,
+                precomputed_endpoint_results=endpoint_results,
+            )
+
+        seed_results: list[SeedResult] = []
+        for seed in args.seeds:
+            print(f"seed {seed}: running full pipeline on {device}...", flush=True)
+            first = _run(seed, args.results_root)
+            released = first.release_decision.released
+            print(
+                f"seed {seed}: primary_estimate={first.primary_estimate} "
+                f"released={released} witnesses={dict(first.witness_status)}",
+                flush=True,
+            )
+            if args.verify_determinism:
+                print(f"seed {seed}: determinism re-run...", flush=True)
+                second = _run(seed, args.results_root / DETERMINISM_RERUN_DIRNAME)
+                record_seed_determinism(first, second, args.results_root)
+                print(f"seed {seed}: determinism verified (hashes match)", flush=True)
+            seed_results.append(first)
+
+        summary = aggregate(seed_results)
+        summary_path = write_replication_summary(summary, args.results_root)
+    except Actg175DataNotFoundError as exc:
+        print(
+            f"run_replication.py failed: real ACTG175 data not found: {exc}. "
+            "See docs/data_access.md Section 2.",
+            file=sys.stderr,
+        )
+        return 1
+    except Exception as exc:  # noqa: BLE001 -- top-level CLI boundary
+        print(f"run_replication.py failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
+
+    print(
+        f"stability_determination: {summary.stability_determination} "
+        f"(direction agreement {summary.direction_agreement_count}/{len(seed_results)})"
+    )
+    print(f"mean={summary.mean} median={summary.median} std_dev={summary.std_dev}")
+    print(f"replication summary written to: {summary_path}")
+    print("run_replication.py succeeded")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
