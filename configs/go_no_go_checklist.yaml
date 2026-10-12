@@ -61,3 +61,13 @@ items:
   # task 15.4: `scripts/run_paper.py` has been confirmed to reproduce
   # tables/figures from saved predictions via one documented command.
   one_command_reproduction_verified: false
+
+  # neural-experiment-pipeline task 20 (Requirement 18.4): this item is
+  # NOT a human attestation like the twelve above -- `check_go_no_go.py`
+  # always recomputes it from `evaluate_readiness(load_ledger(results_root))`
+  # and ignores whatever boolean is written here, so it cannot be
+  # mechanically bypassed by editing this file. The key exists so the
+  # checklist's "every item defaults to false, resolved only by a real
+  # check" shape stays uniform across all thirteen items; this value is
+  # never actually read.
+  neural_readiness_verified: false

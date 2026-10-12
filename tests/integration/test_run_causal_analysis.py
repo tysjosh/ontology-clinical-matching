@@ -100,6 +100,42 @@ def test_runs_negative_controls_and_witnesses(analysis_summary):
     assert isinstance(analysis_summary["aggregate_decision_passed"], bool)
 
 
+def test_summary_carries_release_reasons_and_population_counts_for_honest_reporting(
+    analysis_summary,
+):
+    """Task 22.2 (Requirement 19.1): the summary dict carries the real
+    six-way release decision's failing-condition names (list, possibly
+    empty) and the supported/abstained population counts, so
+    `reporting.tables.build_blocked_outcome_report` can be called
+    directly from this summary without re-deriving anything."""
+    assert analysis_summary["release_decision_released"] is False
+    assert isinstance(analysis_summary["release_decision_reasons"], list)
+    assert isinstance(analysis_summary["supported_count"], int)
+    assert analysis_summary["supported_count"] > 0
+    assert isinstance(analysis_summary["abstained_count"], int)
+    # uncertainty_valid is conservatively False at this script's scope
+    # (see module docstring), so the release gate never actually passes
+    # here -- there is always at least one failing condition named.
+    assert len(analysis_summary["release_decision_reasons"]) > 0
+
+
+def test_summary_carries_every_sensitivity_variant_outcome_including_contradicting_ones(
+    analysis_summary,
+):
+    """Task 22.2 (Requirement 19.3): every one of the eight frozen
+    sensitivity variants' full outcome (name, status, estimate,
+    direction, ...) is present on the summary, unfiltered -- including
+    whichever variants' direction happens to contradict the primary
+    estimate's for this seed."""
+    outcomes = analysis_summary["sensitivity_variant_outcomes"]
+    assert len(outcomes) == 8
+    names = {outcome["name"] for outcome in outcomes}
+    assert len(names) == 8
+    for outcome in outcomes:
+        assert outcome["status"] in {"executed", "unexecuted"}
+        assert outcome["direction"] in {"positive", "negative", "null", "undetermined"}
+
+
 def test_writes_real_artifacts_to_results_root(analysis_summary):
     manifest_path = Path(analysis_summary["manifest_path"])
     reference_path = Path(analysis_summary["reference_path"])
@@ -125,6 +161,52 @@ def test_writes_real_artifacts_to_results_root(analysis_summary):
     assert len(registry_lines) >= 1
     last_entry = json.loads(registry_lines[-1])
     assert last_entry["experiment_id"] == analysis_summary["experiment_id"]
+
+
+def test_writes_exactly_k_public_and_k_protected_audit_artifacts(analysis_summary):
+    """Task 17.2: one public and one protected audit artifact per
+    candidate estimate -- the six causal baselines plus the eight
+    sensitivity variants (K=14 here), including when an estimate is
+    suppressed, released, or (for `boosted_propensity_model`) never
+    executed at all (Requirement 12.1, 12.2)."""
+    manifest_path = Path(analysis_summary["manifest_path"])
+    experiment_dir = manifest_path.parent
+    public_dir = experiment_dir / "audit" / "public"
+    protected_dir = experiment_dir / "audit" / "protected"
+
+    causal_names = set(analysis_summary["causal_estimates"])
+    assert len(causal_names) == 6
+    sensitivity_names = {
+        f"sensitivity_{name}" for name in analysis_summary["sensitivity_unexecuted_variants"]
+    } | {
+        f"sensitivity_{name}"
+        for name in (
+            "boosted_propensity_model",
+            "alternative_weight_clipping",
+            "alternative_support_thresholds",
+            "increased_missingness_stress",
+            "week_20_removed",
+            "treatment_comparator_reversal",
+            "shifted_endpoint_horizon",
+            "stronger_selection_severity",
+        )
+    }
+    expected_names = causal_names | sensitivity_names
+    assert len(expected_names) == 14
+
+    public_files = {p.stem for p in public_dir.glob("*.json")}
+    protected_files = {p.stem for p in protected_dir.glob("*.json")}
+
+    assert public_files == expected_names
+    assert protected_files == expected_names
+
+    for name in expected_names:
+        public_payload = json.loads((public_dir / f"{name}.json").read_text())
+        protected_payload = json.loads((protected_dir / f"{name}.json").read_text())
+        assert public_payload["estimate_status"] in {"released", "suppressed"}
+        assert protected_payload["estimate_status"] == public_payload["estimate_status"]
+        if public_payload["estimate_status"] == "suppressed":
+            assert public_payload["estimate"] is None
 
 
 def test_sealed_reference_artifact_is_not_readable_without_a_token(analysis_summary):

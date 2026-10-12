@@ -36,6 +36,7 @@ diverge from this document, this document governs and the code is the bug.
 | Derived patient-level records, timelines, `ClinicalEvent`s, split membership, checkpoints trained on real patient data, patient-level predictions | `results/<experiment_id>/` | No — gitignored (`.gitignore`: `results/*`, only `.gitkeep` is tracked) |
 | Dataset contract, target-trial spec, experiment configs (no patient rows, only schema/metadata/frozen parameters) | `configs/` | Yes |
 | Aggregate, privacy-scanned, minimum-cell-size-enforced tables/figures/reports intended for the paper | `results/<experiment_id>/report/` (written by `src/reporting/`) | Only after passing the export scan (task 2.1) and min-cell-size checks (task 2.2); copies destined for the paper source live outside this repo's git history unless explicitly cleared |
+| Per-claim audit reports (Requirement 11.10/12), suppressed-estimate-redacted | `results/<experiment_id>/audit/public/` (written by `src/witnesses/audit_io.py`, task 17.1) | Only after passing the export scan (task 2.1); `scripts/scan_exports.py` is pointed at this subdirectory specifically. The sibling `results/<experiment_id>/audit/protected/` directory, which retains the real numeric estimate for a suppressed candidate, is never scanned for export and never leaves protected storage, exactly like `reference/` |
 
 **Protected storage**, for the purposes of this policy and of every later access-control check in
 the codebase, means exactly the two gitignored locations above: `data/raw/` and

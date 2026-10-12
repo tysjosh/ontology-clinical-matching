@@ -19,11 +19,12 @@ import pytest
 import yaml
 
 from causal.overlap import ArmPropensitySummary, CommonSupportSummary, OverlapReport
+from evaluation.release_gate import ReleaseDecision
 from protocols.consistency_checker import ProtocolViolation
 from protocols.schema import TargetTrialSpec
 from uncertainty.bootstrap import BootstrapCI
 from uncertainty.support_gate import SupportDecision
-from witnesses.audit_report import AuditReport, build_audit_report
+from witnesses.audit_report import AuditFieldError, AuditReport, build_audit_report
 from witnesses.temporal import WitnessResult
 
 MAIN_SPEC_PATH = (
@@ -119,7 +120,20 @@ def provenance() -> dict:
 
 
 @pytest.fixture
-def report(
+def release_decision() -> ReleaseDecision:
+    return ReleaseDecision(
+        released=True,
+        overlap_valid=True,
+        balance_valid=True,
+        uncertainty_valid=True,
+        temporal_pass=True,
+        causal_pass=True,
+        clinical_pass=True,
+        reasons=(),
+    )
+
+
+def _build_released_report(
     target_trial_spec,
     overlap_report,
     bootstrap_ci,
@@ -127,8 +141,10 @@ def report(
     abstentions,
     violations,
     provenance,
+    release_decision,
+    **overrides,
 ) -> AuditReport:
-    return build_audit_report(
+    kwargs = dict(
         protocol=target_trial_spec,
         population={"description": "ACTG175 eligible arm-0/arm-1 cohort", "n": 238},
         treatment={"intervention": "zidovudine+didanosine", "comparator": "zidovudine"},
@@ -138,6 +154,41 @@ def report(
         abstentions=abstentions,
         violations=violations,
         provenance=provenance,
+        release_decision=release_decision,
+        estimate_status="released",
+        dataset_checksum="deadbeef" * 8,
+        split_hash="split-hash-abc123",
+        resolved_config_hash="config-hash-def456",
+        checkpoint_hashes={"intervention_aware": "ckpt-hash-1"},
+        seed=12345,
+        sensitivity_variant=None,
+        supported_count=230,
+        abstained_count=8,
+    )
+    kwargs.update(overrides)
+    return build_audit_report(**kwargs)
+
+
+@pytest.fixture
+def report(
+    target_trial_spec,
+    overlap_report,
+    bootstrap_ci,
+    witness_results,
+    abstentions,
+    violations,
+    provenance,
+    release_decision,
+) -> AuditReport:
+    return _build_released_report(
+        target_trial_spec,
+        overlap_report,
+        bootstrap_ci,
+        witness_results,
+        abstentions,
+        violations,
+        provenance,
+        release_decision,
     )
 
 
@@ -212,3 +263,234 @@ def test_audit_report_to_dict_contains_all_required_fields(report):
     for field_name in ["estimate", "estimate_ci_low", "estimate_ci_high"]:
         assert field_name in as_dict
         assert as_dict[field_name] is not None
+
+
+# ---------------------------------------------------------------------------
+# Task 17: the Requirement 12.3 extension fields and AuditFieldError.
+# ---------------------------------------------------------------------------
+
+
+def test_released_report_carries_release_decision_fields(report, release_decision):
+    assert report.released is True
+    assert report.release_reasons == ()
+    assert report.overlap_valid is True
+    assert report.balance_valid is True
+    assert report.uncertainty_valid is True
+    assert report.temporal_pass is True
+    assert report.causal_pass is True
+    assert report.clinical_pass is True
+
+
+def test_released_report_carries_provenance_hashes_and_counts(report):
+    assert report.estimate_status == "released"
+    assert report.dataset_checksum == "deadbeef" * 8
+    assert report.split_hash == "split-hash-abc123"
+    assert report.resolved_config_hash == "config-hash-def456"
+    assert report.checkpoint_hashes == {"intervention_aware": "ckpt-hash-1"}
+    assert report.seed == 12345
+    assert report.sensitivity_variant is None
+    assert report.supported_count == 230
+    assert report.abstained_count == 8
+    assert report.locked_evaluation_id is None
+    assert report.reference_access_timestamp is None
+
+
+def test_suppressed_report_still_marks_estimate_status_and_release_reasons(
+    target_trial_spec,
+    overlap_report,
+    bootstrap_ci,
+    witness_results,
+    abstentions,
+    violations,
+    provenance,
+):
+    """`build_audit_report` returns the single, *protected*-shaped
+    `AuditReport`: it retains whatever real estimate was passed, even when
+    `estimate_status="suppressed"` (Requirement 12.6 -- nulling the one
+    report object here would make the protected artifact as blind as the
+    public one). Task 17.1's writer is where the public copy gets its
+    estimate nulled."""
+    blocked_decision = ReleaseDecision(
+        released=False,
+        overlap_valid=False,
+        balance_valid=True,
+        uncertainty_valid=True,
+        temporal_pass=True,
+        causal_pass=True,
+        clinical_pass=True,
+        reasons=("overlap_valid: fail (OverlapReport.support_valid is False)",),
+    )
+    report = _build_released_report(
+        target_trial_spec,
+        overlap_report,
+        bootstrap_ci,
+        witness_results,
+        abstentions,
+        violations,
+        provenance,
+        blocked_decision,
+        estimate_status="suppressed",
+    )
+
+    assert report.estimate_status == "suppressed"
+    assert report.estimate == bootstrap_ci.point_estimate
+    assert report.released is False
+    assert report.release_reasons == (
+        "overlap_valid: fail (OverlapReport.support_valid is False)",
+    )
+
+    as_dict = report.to_dict()
+    assert as_dict["estimate_status"] == "suppressed"
+    assert as_dict["release_reasons"] == [
+        "overlap_valid: fail (OverlapReport.support_valid is False)"
+    ]
+
+
+def test_suppressed_report_with_no_computed_estimate_has_null_estimate(
+    target_trial_spec,
+    overlap_report,
+    witness_results,
+    abstentions,
+    violations,
+    provenance,
+    release_decision,
+):
+    """A suppressed candidate that never had an interval computed at all
+    passes `estimate=None` through unchanged."""
+    report = _build_released_report(
+        target_trial_spec,
+        overlap_report,
+        None,
+        witness_results,
+        abstentions,
+        violations,
+        provenance,
+        release_decision,
+        estimate_status="suppressed",
+    )
+    assert report.estimate is None
+    assert report.estimate_ci_low is None
+    assert report.estimate_ci_high is None
+
+
+def test_locked_evaluation_fields_are_carried_when_supplied(
+    target_trial_spec,
+    overlap_report,
+    bootstrap_ci,
+    witness_results,
+    abstentions,
+    violations,
+    provenance,
+    release_decision,
+):
+    timestamp = datetime(2026, 9, 6, 12, 0, 0)
+    report = _build_released_report(
+        target_trial_spec,
+        overlap_report,
+        bootstrap_ci,
+        witness_results,
+        abstentions,
+        violations,
+        provenance,
+        release_decision,
+        locked_evaluation_id="eval-0001",
+        reference_access_timestamp=timestamp,
+    )
+    assert report.locked_evaluation_id == "eval-0001"
+    assert report.reference_access_timestamp == timestamp.isoformat()
+
+
+@pytest.mark.parametrize(
+    "override_key,override_value",
+    [
+        ("dataset_checksum", ""),
+        ("split_hash", ""),
+        ("resolved_config_hash", ""),
+        ("checkpoint_hashes", None),
+        ("seed", None),
+        ("supported_count", None),
+        ("abstained_count", None),
+        ("release_decision", None),
+    ],
+)
+def test_each_missing_required_field_raises_audit_field_error_naming_it(
+    target_trial_spec,
+    overlap_report,
+    bootstrap_ci,
+    witness_results,
+    abstentions,
+    violations,
+    provenance,
+    release_decision,
+    override_key,
+    override_value,
+):
+    effective_release_decision = (
+        override_value if override_key == "release_decision" else release_decision
+    )
+    overrides = {} if override_key == "release_decision" else {override_key: override_value}
+
+    with pytest.raises(AuditFieldError) as excinfo:
+        _build_released_report(
+            target_trial_spec,
+            overlap_report,
+            bootstrap_ci,
+            witness_results,
+            abstentions,
+            violations,
+            provenance,
+            effective_release_decision,
+            **overrides,
+        )
+    assert override_key in str(excinfo.value)
+
+
+def test_empty_checkpoint_hashes_is_accepted_for_a_checkpoint_free_estimate(
+    target_trial_spec,
+    overlap_report,
+    bootstrap_ci,
+    witness_results,
+    abstentions,
+    violations,
+    provenance,
+    release_decision,
+):
+    """A purely causal/statistical estimate (no neural checkpoint) passes
+    `checkpoint_hashes={}` deliberately; this must be accepted, not
+    treated the same as an unavailable field."""
+    report = _build_released_report(
+        target_trial_spec,
+        overlap_report,
+        bootstrap_ci,
+        witness_results,
+        abstentions,
+        violations,
+        provenance,
+        release_decision,
+        checkpoint_hashes={},
+    )
+    assert report.checkpoint_hashes == {}
+
+
+def test_invalid_estimate_status_raises_audit_field_error(
+    target_trial_spec,
+    overlap_report,
+    bootstrap_ci,
+    witness_results,
+    abstentions,
+    violations,
+    provenance,
+    release_decision,
+):
+    with pytest.raises(AuditFieldError):
+        _build_released_report(
+            target_trial_spec,
+            overlap_report,
+            bootstrap_ci,
+            witness_results,
+            abstentions,
+            violations,
+            provenance,
+            release_decision,
+            estimate_status="not_a_real_status",
+        )

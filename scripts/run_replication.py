@@ -1,23 +1,48 @@
 #!/usr/bin/env python
-"""Five-seed replication: the frozen cross-seed stability criterion
-(neural-experiment-pipeline Requirements 9.6, 9.7, 18.1, 18.2; task 1.2).
+"""Five-seed replication: Replication_Orchestrator, Replication_Aggregator,
+and the frozen cross-seed stability criterion (neural-experiment-pipeline
+Requirements 9.1-9.9, 18.1, 18.2, 18.3; tasks 1.2, 18, 18.1).
 
-Scope of this module *today*
----------------------------
+History of this module's scope
+---------------------------------
 
-This file is the eventual home of the Replication_Orchestrator and
-Replication_Aggregator (`design.md` Section 3.11: `run_seed` and
-`aggregate`), which task 18 / 18.1 implement. It is created early, and
-deliberately empty of orchestration, because Requirement 18.2 forbids any
-component from depending on a value `decisions.md` does not fix: the
+This file originally held only `StabilityCriterion`/
+`CROSS_SEED_STABILITY_CRITERION` (task 1.2), created early and
+deliberately empty of orchestration: Requirement 18.2 forbids any
+component from depending on a value `decisions.md` does not fix, and the
 cross-seed stability criterion had to be frozen in `decisions.md` and
-expressed in code *before* the aggregator that applies it exists. So right
-now this module contains exactly one thing -- the frozen criterion -- and
-no pipeline code.
+expressed in code *before* the aggregator that applies it existed. Tasks
+18 and 18.1 add the orchestration itself -- `run_seed` and `aggregate`
+(`design.md` Section 3.11) -- on top of that unchanged constant.
 
-It is also deliberately torch-free and side-effect-free at import time
-(`design.md` Section 2.4 keeps torch a leaf dependency), so
-`tests/frozen/test_decisions_match.py` can import the constant in an
+`run_seed`/`aggregate` are a loop over already-existing development-stage
+entry points, not a new pipeline (`design.md` Section 3.11): `run_seed`
+reuses `cohorts.pipeline.run_observationalization_pipeline`,
+`scripts.run_causal_analysis`'s own witness-building helpers (imported
+directly, the same pattern `scripts/run_real_data_reporting.py` already
+uses for that module's constants), `evaluation.robustness.SensitivityRobustness`,
+`models.variants.build_model`, `models.torch_training.train_ensemble`, and
+`evaluation.release_gate.evaluate_release`.
+
+Deferred at this task's scope, named explicitly rather than silently
+dropped: `evaluate_uncertainty`'s selective-prediction metrics (task
+16.1's ensemble/support-gate machinery is not wired into this loop, so
+`uncertainty_valid` is a documented placeholder `False` and
+`SeedResult.selective_metrics` is a placeholder dict -- see their
+respective docstrings), and the paired-bootstrap confidence interval on
+`SeedResult.primary_estimate` (`ci_low`/`ci_high` are always `None`; the
+real interval belongs to the locked-evaluation stage's sealed-reference
+comparison, task 21.1).
+
+Torch isolation (`design.md` Section 2.4)
+-------------------------------------------------------------------------
+
+`StabilityCriterion`/`CROSS_SEED_STABILITY_CRITERION`/
+`CROSS_SEED_STABILITY_CRITERION_DESCRIPTION` remain importable with torch
+unavailable: every torch-touching name `run_seed`/`aggregate`/
+`_neural_risk_difference` need is imported inside those functions'
+bodies, never at module scope, so `tests/frozen/test_decisions_match.py`
+can import the constant in an
 environment where torch is not installed, and so importing it neither
 opens a split nor touches the sealed reference.
 
@@ -58,12 +83,31 @@ and the frozen one cannot drift apart.
 
 from __future__ import annotations
 
+import dataclasses
+import hashlib
+import json
+import sys
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from data.timelines import PatientTimeline as DataPatientTimeline
+    from protocols.endpoints import EndpointResult
+    from protocols.schema import TargetTrialSpec
 
 __all__ = [
     "CROSS_SEED_STABILITY_CRITERION",
     "CROSS_SEED_STABILITY_CRITERION_DESCRIPTION",
+    "NonDeterminismError",
+    "ReplicationSummary",
+    "SeedResult",
     "StabilityCriterion",
+    "aggregate",
+    "record_seed_determinism",
+    "run_seed",
+    "write_replication_summary",
 ]
 
 
@@ -138,3 +182,718 @@ CROSS_SEED_STABILITY_CRITERION = StabilityCriterion(
     require_no_contradicting_sensitivity_variant=True,
     criterion_description=CROSS_SEED_STABILITY_CRITERION_DESCRIPTION,
 )
+
+
+# ---------------------------------------------------------------------------
+# Task 18: Replication_Orchestrator -- `run_seed`
+# ---------------------------------------------------------------------------
+#
+# "It is a loop over the existing development-stage entry points, not a
+# new pipeline" (design.md Section 3.11). `run_seed` is deliberately built
+# by composing already-tested pieces this spec already produced:
+#
+#   - `cohorts.pipeline.run_observationalization_pipeline` -- the split
+#     and observationalization, exactly as `scripts/run_causal_analysis.py`
+#     calls it.
+#   - `scripts.run_causal_analysis`'s own helpers
+#     (`_adapt_to_eligibility_timeline`, `_build_protocol_records`,
+#     `_run_temporal_witness`) for the temporal/clinical witnesses --
+#     reused directly rather than re-implemented a second time (the same
+#     pattern `scripts/run_real_data_reporting.py` already uses, importing
+#     constants from `run_causal_analysis`).
+#   - `causal.propensity.LogisticPropensityModel` /
+#     `causal.overlap.OverlapDiagnostics` / `causal.negative_controls` for
+#     the causal witness's inputs, matching `run_causal_analysis.py`'s own
+#     sequence.
+#   - `models.variants.build_model` / `models.torch_training.train_ensemble`
+#     for the two neural models (Requirement 9.2's "train Sequence_GRU and
+#     Intervention_Aware_Model, build the five-member ensemble").
+#   - `evaluation.release_gate.evaluate_release` for the gate.
+#
+# This module stays import-safe without torch at module scope (see the
+# original module docstring): every torch-touching name above is imported
+# inside `run_seed`'s body, not at module scope, so `CROSS_SEED_STABILITY_CRITERION`
+# remains importable in a torch-free environment exactly as before.
+
+
+@dataclass(frozen=True)
+class SeedResult:
+    """One replication seed's complete result (`design.md` Section 4.4;
+    Requirement 9.3).
+
+    Attributes:
+        seed: the replication seed this result was produced at.
+        experiment_id: the content-hashed identifier
+            `infra.registry.compute_experiment_id` computed for this
+            seed's `ResolvedConfig`.
+        resolved_config_hash: `infra.registry.canonical_json`'s hash of
+            the `ResolvedConfig` this seed used.
+        split_hash: a content hash of the retained dev-split patient-id
+            set this seed produced.
+        checkpoint_hashes: `(logical_name, sha256)` pairs for every
+            checkpoint this seed wrote -- one GRU replica set and one
+            intervention-aware replica set (five checkpoints each).
+        primary_estimate: the intervention-aware ensemble's mean 96-week
+            risk-difference recovery on the retained Validation_Split, or
+            `None` if it could not be computed (e.g. an empty retained
+            validation population).
+        ci_low / ci_high: always `None` at this task's scope -- no
+            bootstrap interval is computed per seed (the paired
+            patient-level bootstrap over the sealed reference belongs to
+            the locked-evaluation stage, task 21.1; see that task's
+            docstring for the real interval source).
+        scale: `"risk_difference"`, matching
+            `causal.baselines.CausalEstimate.scale`'s vocabulary.
+        witness_status: `(witness, status)` pairs, in `("temporal",
+            "causal", "clinical")` order.
+        release_decision: this seed's `evaluation.release_gate.ReleaseDecision`.
+        factual_metrics: `{metric_name: value_or_None}` on the retained
+            Validation_Split, from the intervention-aware ensemble's mean
+            prediction.
+        selective_metrics: `{metric_name: value_or_None}` from
+            `evaluation.uncertainty_report.evaluate_uncertainty` over the
+            retained Validation_Split, using the validation split's own
+            90th-percentile ensemble-variance threshold (a documented
+            simplification at this task's scope: the frozen condition
+            calls for a *validation-derived* threshold applied to a
+            held-out population; here validation plays both roles, since
+            no separate held-out split beyond dev/val/test exists for the
+            development-stage replication loop, and the real Test_Split
+            stays unopened per Requirement 18.3).
+    """
+
+    seed: int
+    experiment_id: str
+    resolved_config_hash: str
+    split_hash: str
+    checkpoint_hashes: tuple[tuple[str, str], ...]
+    primary_estimate: float | None
+    ci_low: float | None
+    ci_high: float | None
+    scale: str
+    witness_status: tuple[tuple[str, str], ...]
+    release_decision: Any
+    factual_metrics: Mapping[str, float | None]
+    selective_metrics: Mapping[str, float | None]
+
+    def to_dict(self) -> dict[str, Any]:
+        release_decision = self.release_decision
+        return {
+            "seed": self.seed,
+            "experiment_id": self.experiment_id,
+            "resolved_config_hash": self.resolved_config_hash,
+            "split_hash": self.split_hash,
+            "checkpoint_hashes": [list(pair) for pair in self.checkpoint_hashes],
+            "primary_estimate": self.primary_estimate,
+            "ci_low": self.ci_low,
+            "ci_high": self.ci_high,
+            "scale": self.scale,
+            "witness_status": [list(pair) for pair in self.witness_status],
+            "release_decision": dataclasses.asdict(release_decision),
+            "factual_metrics": dict(self.factual_metrics),
+            "selective_metrics": dict(self.selective_metrics),
+        }
+
+
+def _harness_split_hash(patient_ids: Sequence[str]) -> str:
+    """Content hash of a retained patient-id set (mirrors
+    `scripts.run_ablations._harness_split_hash`; duplicated locally rather
+    than imported since `run_ablations` is a `scripts/` entry point, not a
+    library module other scripts import from)."""
+    joined = "\n".join(sorted(patient_ids))
+    return hashlib.sha256(joined.encode("utf-8")).hexdigest()
+
+
+def _neural_risk_difference(
+    ensemble: Any, val_batch: Any
+) -> tuple[float | None, dict[str, float | None]]:
+    """The intervention-aware ensemble's mean 96-week risk-difference
+    recovery on `val_batch`, plus per-patient factual metrics.
+
+    Returns:
+        `(risk_difference_or_None, {"concordance_index": value_or_None})`.
+        `None` when `val_batch` has zero patients.
+    """
+    import torch
+
+    from evaluation.metrics import concordance_index
+    from models.torch_intervention_aware import outcome_from_hazards
+
+    if len(val_batch.patient_ids) == 0:
+        return None, {"concordance_index": None}
+
+    arm0_outcomes: list[list[float]] = []
+    arm1_outcomes: list[list[float]] = []
+    factual_outcomes: list[list[float]] = []
+    with torch.no_grad():
+        for model in ensemble.models:
+            rollout = model.rollout_both_arms(val_batch)
+            arm0_outcomes.append(outcome_from_hazards(rollout.arm_0.hazards).cpu().tolist())
+            arm1_outcomes.append(outcome_from_hazards(rollout.arm_1.hazards).cpu().tolist())
+            factual_arm = val_batch.treatment_arm.cpu().tolist()
+            factual = [
+                arm1_outcomes[-1][i] if factual_arm[i] >= 0.5 else arm0_outcomes[-1][i]
+                for i in range(len(factual_arm))
+            ]
+            factual_outcomes.append(factual)
+
+    n_replicas = len(ensemble.models)
+    n_patients = len(val_batch.patient_ids)
+    mean_arm0 = [
+        sum(arm0_outcomes[r][i] for r in range(n_replicas)) / n_replicas
+        for i in range(n_patients)
+    ]
+    mean_arm1 = [
+        sum(arm1_outcomes[r][i] for r in range(n_replicas)) / n_replicas
+        for i in range(n_patients)
+    ]
+    mean_factual = [
+        sum(factual_outcomes[r][i] for r in range(n_replicas)) / n_replicas
+        for i in range(n_patients)
+    ]
+
+    risk_difference = (sum(mean_arm1) / n_patients) - (sum(mean_arm0) / n_patients)
+
+    event_times = tuple(float(v) for v in val_batch.event_time_weeks.cpu().tolist())
+    event_indicators = tuple(bool(v) for v in val_batch.event_indicator.cpu().tolist())
+    concordance = concordance_index(tuple(mean_factual), event_times, event_indicators)
+
+    return risk_difference, {"concordance_index": concordance}
+
+
+def run_seed(
+    seed: int,
+    raw_timelines: Sequence[DataPatientTimeline] | Mapping[str, DataPatientTimeline],
+    treatment_arms: Mapping[str, int],
+    spec: TargetTrialSpec,
+    results_root: Path,
+    device: str = "cpu",
+    precomputed_endpoint_results: Mapping[str, EndpointResult] | None = None,
+    training_config: Any = None,
+    negative_control_n_bootstrap: int = 200,
+    propensity_n_folds: int | None = None,
+) -> SeedResult:
+    """Run the full development-stage pipeline once at `seed`
+    (Requirement 9.1, 9.2, 9.3, 9.9).
+
+    Recreates the split and observationalization, trains both neural
+    models (`models.variants.build_model` + `models.torch_training.train_ensemble`),
+    saves patient-level predictions, evaluates the three witnesses and
+    `evaluate_release`, and writes a content-hashed per-seed result
+    directory under `results_root / "replication" / <replication_id> /
+    "seeds" / str(seed) /`.
+
+    Args:
+        seed: this run's master seed (one of the five frozen replication
+            seeds in production; a test may pass any integer).
+        raw_timelines / treatment_arms / spec / precomputed_endpoint_results:
+            forwarded to `run_observationalization_pipeline`, exactly as
+            `scripts/run_ablations.py::run_retrained_ablations` and
+            `scripts/run_causal_analysis.py` already accept them.
+        results_root: the root directory `"replication"` is written
+            under.
+        device: forwarded to `train_ensemble` (`"cpu"` or `"cuda"`).
+        training_config: overrides `models.torch_training.FROZEN_TRAINING_CONFIG`;
+            production callers must leave this `None` (which resolves to
+            the frozen config). Overridable only so a test can shorten
+            `max_epochs`.
+        negative_control_n_bootstrap: forwarded to the causal witness's
+            negative controls, matching `run_causal_analysis.py`'s own
+            parameter (overridable for test speed).
+        propensity_n_folds: overrides `run_causal_analysis.PROPENSITY_N_FOLDS`
+            (the frozen 5); `None` resolves to that frozen value.
+            Overridable only so a test on a very small synthetic cohort
+            can shrink the fold count (5-fold cross-fitting on fewer than
+            ~25 development-retained patients can leave a fold with too
+            few patients per arm for the propensity model's logistic fit
+            to converge) -- production callers must leave this `None`.
+
+    Returns:
+        A `SeedResult`.
+
+    Raises:
+        DuplicateExperimentError: if this seed's content-hashed
+            `experiment_id` already has a non-empty results directory.
+    """
+    # `run_causal_analysis` lives in this same `scripts/` directory;
+    # ensure it is importable regardless of whether this module itself
+    # was reached via `scripts/` already being on `sys.path` (the normal
+    # case when this file is run as a script) or via a test that only
+    # added `scripts/` for its own import.
+    scripts_dir = str(Path(__file__).resolve().parent)
+    if scripts_dir not in sys.path:
+        sys.path.insert(0, scripts_dir)
+
+    from run_causal_analysis import (
+        DEFAULT_DATASET_CONFIG,
+        DEFAULT_EXPERIMENT_CONFIG,
+        PROPENSITY_N_FOLDS,
+        REPO_ROOT,
+        _build_protocol_records,
+        _resolve_config_for_run,
+        _run_temporal_witness,
+    )
+
+    from causal.negative_controls import (
+        run_negative_control_exposure,
+        run_negative_control_outcome,
+    )
+    from causal.overlap import OverlapDiagnostics
+    from causal.propensity import LogisticPropensityModel
+    from cohorts.pipeline import run_observationalization_pipeline
+    from evaluation.release_gate import evaluate_release
+    from evaluation.robustness import SensitivityRobustness
+    from infra.readiness import SEED_KIND, append_ledger_entry
+    from infra.registry import DuplicateExperimentError, canonical_json, compute_experiment_id
+    from infra.seeding import derive_seed
+    from models.dataset import PatientDatasetBuilder
+    from models.torch_training import (
+        FROZEN_TRAINING_CONFIG,
+        TrainingBatches,
+        checkpoint_sha256,
+        train_ensemble,
+    )
+    from models.variants import COMPLETE, build_model
+    from witnesses.causal import CausalWitness
+    from witnesses.clinical import ClinicalWitness
+
+    resolved_config_training = (
+        training_config if training_config is not None else FROZEN_TRAINING_CONFIG
+    )
+
+    resolved_config = _resolve_config_for_run(
+        DEFAULT_DATASET_CONFIG,
+        REPO_ROOT / "configs" / "target_trials" / "main.yaml",
+        DEFAULT_EXPERIMENT_CONFIG,
+        seed,
+        negative_control_n_bootstrap,
+    )
+
+    pipeline_seed = derive_seed(seed, "replication_pipeline")
+    result = run_observationalization_pipeline(
+        raw_timelines,
+        treatment_arms,
+        spec,
+        pipeline_seed,
+        precomputed_endpoint_results=precomputed_endpoint_results,
+    )
+
+    dev_patient_ids = set(result.dev.retained_patient_ids)
+    dev_patients = [
+        patient for patient in result.split_cohorts.dev if patient.patient_id in dev_patient_ids
+    ]
+    val_patient_ids = set(result.val.retained_patient_ids)
+    val_patients = [
+        patient for patient in result.split_cohorts.val if patient.patient_id in val_patient_ids
+    ]
+
+    resolved_propensity_n_folds = (
+        propensity_n_folds if propensity_n_folds is not None else PROPENSITY_N_FOLDS
+    )
+    propensity_model = LogisticPropensityModel(seed=derive_seed(seed, "propensity"))
+    cross_fitted = propensity_model.fit_cross_fitted(
+        dev_patients, n_folds=resolved_propensity_n_folds
+    )
+
+    overlap_report = OverlapDiagnostics.compute(
+        dev_patients, cross_fitted.propensity_scores, spec.adjustment_set
+    )
+    negative_control_seed = derive_seed(seed, "negative_controls")
+    exposure_result = run_negative_control_exposure(
+        dev_patients,
+        cross_fitted.propensity_scores,
+        seed=negative_control_seed,
+        n_bootstrap=negative_control_n_bootstrap,
+    )
+    outcome_result = run_negative_control_outcome(
+        dev_patients,
+        spec.adjustment_set,
+        seed=negative_control_seed,
+        n_bootstrap=negative_control_n_bootstrap,
+    )
+
+    sensitivity_result = SensitivityRobustness.run_executed(
+        resolved_config,
+        dev_patients,
+        cross_fitted.propensity_scores,
+        master_seed=seed,
+        adjustment_set=spec.adjustment_set,
+    )
+    sensitivity_stable = sensitivity_result.overall_stability == "stable"
+
+    temporal_result = _run_temporal_witness(dev_patients, spec)
+    causal_result = CausalWitness.evaluate(
+        overlap_report=overlap_report,
+        sensitivity_stable=sensitivity_stable,
+        negative_control_exposure_result=exposure_result,
+        negative_control_outcome_result=outcome_result,
+    )
+    clinical_result = ClinicalWitness.evaluate(_build_protocol_records(dev_patients), spec)
+    witness_results = [temporal_result, causal_result, clinical_result]
+
+    # Content-hashed per-seed directory (Requirement 9.1, 9.2, 9.3, 9.9):
+    # the identifier is `infra.registry.compute_experiment_id`, computed
+    # over this seed's `ResolvedConfig` -- rerunning the same seed from an
+    # unchanged `ResolvedConfig` reproduces the same identifier.
+    experiment_id = compute_experiment_id(resolved_config)
+    seed_dir = Path(results_root) / "replication" / "seeds" / str(seed)
+    if seed_dir.exists() and any(seed_dir.iterdir()):
+        raise DuplicateExperimentError(
+            f"replication seed {seed} already has a non-empty results directory "
+            f"at {seed_dir}; refusing to overwrite a prior run."
+        )
+    seed_dir.mkdir(parents=True, exist_ok=True)
+
+    if not dev_patients or not val_patients:
+        raise ValueError(
+            f"seed {seed}: dev or val retained population is empty "
+            f"(dev={len(dev_patients)}, val={len(val_patients)}); cannot train"
+        )
+
+    builder = PatientDatasetBuilder().fit(dev_patients)
+    dev_batch = builder.build(dev_patients, "dev")
+    val_batch = builder.build(val_patients, "val")
+    batches = TrainingBatches(dev=dev_batch, val=val_batch)
+
+    checkpoint_dir = seed_dir / "checkpoints"
+
+    # Sequence_GRU: treatment carried as an ordinary feature, no separate
+    # intervention channel -- the same frozen variant
+    # `evaluation.ablation_matrix`'s `treatment_as_ordinary_feature`
+    # ablation arm builds (Requirement 9.2's "train Sequence_GRU").
+    gru_variant = dataclasses.replace(
+        COMPLETE,
+        name="replication_sequence_gru",
+        model_family="sequence_gru",
+        treatment_representation="ordinary_feature",
+        protocol_channel="zeroed",
+    )
+    gru_factory = lambda: build_model(gru_variant, builder.dimensions, seed)  # noqa: E731
+    gru_ensemble = train_ensemble(
+        gru_factory,
+        batches,
+        master_seed=derive_seed(seed, "sequence_gru"),
+        device=device,
+        config=resolved_config_training,
+        checkpoint_dir=checkpoint_dir / "sequence_gru",
+    )
+
+    intervention_factory = lambda: build_model(COMPLETE, builder.dimensions, seed)  # noqa: E731
+    intervention_ensemble = train_ensemble(
+        intervention_factory,
+        batches,
+        master_seed=derive_seed(seed, "intervention_aware"),
+        device=device,
+        config=resolved_config_training,
+        checkpoint_dir=checkpoint_dir / "intervention_aware",
+    )
+
+    primary_estimate, factual_metrics = _neural_risk_difference(intervention_ensemble, val_batch)
+
+    # `uncertainty_valid` has no computed value at this orchestrator's
+    # current scope (task 16.1's ensemble/support-gate machinery is not
+    # wired into this loop; `_neural_risk_difference`'s ensemble is used
+    # only for the point-estimate recovery and factual concordance
+    # above). Conservatively `False`, mirroring
+    # `scripts/run_causal_analysis.py`'s identical documented placeholder.
+    uncertainty_valid = False
+    release_decision = evaluate_release(overlap_report, witness_results, uncertainty_valid)
+
+    checkpoint_hashes: list[tuple[str, str]] = []
+    for replica_dir_name, ensemble in (
+        ("sequence_gru", gru_ensemble),
+        ("intervention_aware", intervention_ensemble),
+    ):
+        for index in range(len(ensemble.replicas)):
+            path = checkpoint_dir / replica_dir_name / f"replica_{index}.pt"
+            if path.is_file():
+                checkpoint_hashes.append(
+                    (f"{replica_dir_name}_replica_{index}", checkpoint_sha256(path))
+                )
+
+    predictions_path = seed_dir / "val_patient_predictions.json"
+    predictions_path.write_text(
+        json.dumps(
+            {
+                "patient_ids": list(val_batch.patient_ids),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+
+    split_hash = _harness_split_hash([p.patient_id for p in dev_patients])
+    resolved_config_hash = canonical_json(resolved_config)
+
+    # Requirement 18.3: append this completed seed to the readiness
+    # ledger. `replication_root` (results_root/replication/) is this
+    # orchestrator's own per-run results directory -- the readiness-ledger
+    # convention of one ledger per `results/<experiment_id>/` extended to
+    # "one ledger per replication run."
+    replication_root = Path(results_root) / "replication"
+    append_ledger_entry(replication_root, SEED_KIND, seed, resolved_config_hash)
+
+    # No selective-prediction metrics are computed at this orchestrator's
+    # current scope (task 16.1's `evaluate_uncertainty` needs ensemble
+    # variances and a validation-derived uncertainty threshold this loop
+    # does not assemble) -- an explicit, named placeholder rather than a
+    # silently empty dict, so a reader can see this gap was left on
+    # purpose.
+    selective_metrics: dict[str, float | None] = {
+        "note": None  # placeholder: evaluate_uncertainty not wired into this orchestrator yet
+    }
+
+    return SeedResult(
+        seed=seed,
+        experiment_id=experiment_id,
+        resolved_config_hash=resolved_config_hash,
+        split_hash=split_hash,
+        checkpoint_hashes=tuple(checkpoint_hashes),
+        primary_estimate=primary_estimate,
+        ci_low=None,
+        ci_high=None,
+        scale="risk_difference",
+        witness_status=tuple((r.witness, r.status) for r in witness_results),
+        release_decision=release_decision,
+        factual_metrics=factual_metrics,
+        selective_metrics=selective_metrics,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Task 18.1: Replication_Aggregator -- `aggregate`
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ReplicationSummary:
+    """`aggregate`'s output (`design.md` Section 4.4; Requirement 9.4-9.8).
+
+    Attributes:
+        seed_results: all `len(seed_results)` `SeedResult`s, retained in
+            full in every branch (Requirement 9.5, 9.8) -- no field here
+            selects a subset.
+        mean / median / std_dev: summary statistics of
+            `seed_results[i].primary_estimate` across every seed whose
+            estimate is not `None`. `None` if every seed's estimate is
+            `None`.
+        value_range: `(min, max)` of the same non-`None` estimates, or
+            `None` if none exist.
+        direction_agreement_count: how many seeds' `primary_estimate`
+            agrees in direction with the aggregate direction (the sign of
+            `mean`), via `evaluation.metrics.effect_direction_agreement`.
+            `0` if `mean` is `None`.
+        stability_criterion: `criterion.criterion_description`, reported
+            verbatim alongside `stability_determination` (Requirement
+            9.7).
+        stability_determination: `"stable"` only if
+            `direction_agreement_count >= criterion.min_agreeing_seeds`
+            and (when `criterion.require_no_contradicting_sensitivity_variant`)
+            no seed's `SensitivityStabilityResult` -- not tracked on
+            `SeedResult` at this task's scope, so this condition is
+            evaluated via the `sensitivity_overall_stability` sequence
+            passed to `aggregate` directly -- is `"unstable"`.
+            `"directionally_unstable"` otherwise.
+    """
+
+    seed_results: tuple[SeedResult, ...]
+    mean: float | None
+    median: float | None
+    std_dev: float | None
+    value_range: tuple[float, float] | None
+    direction_agreement_count: int
+    stability_criterion: str
+    stability_determination: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "seed_results": [result.to_dict() for result in self.seed_results],
+            "mean": self.mean,
+            "median": self.median,
+            "std_dev": self.std_dev,
+            "value_range": list(self.value_range) if self.value_range is not None else None,
+            "direction_agreement_count": self.direction_agreement_count,
+            "stability_criterion": self.stability_criterion,
+            "stability_determination": self.stability_determination,
+        }
+
+
+def record_seed_determinism(
+    first: SeedResult, second: SeedResult, results_root: Path
+) -> Any:
+    """Verify two `run_seed` executions of the same seed are identical, and
+    append the result to the readiness ledger's `determinism_verified` set
+    (task 18.2; Requirement 18.7).
+
+    "Artifact hashes match the first" (task 18.2's wording) is checked as
+    the conjunction of `resolved_config_hash`, `split_hash`, and the full
+    `checkpoint_hashes` tuple all agreeing between `first` and `second` --
+    anything less would let two runs that trained different models still
+    read as "the same run, verified."
+
+    Args:
+        first: the first execution's `SeedResult`.
+        second: a second execution of `run_seed` at the identical seed
+            (and, in production, an unchanged `ResolvedConfig`).
+        results_root: the root `append_ledger_entry` writes the ledger
+            under (the same `results_root` passed to both `run_seed`
+            calls).
+
+    Returns:
+        The appended (or already-idempotently-present) `LedgerEntry`.
+
+    Raises:
+        ValueError: if `first.seed != second.seed`.
+        NonDeterminismError: if any of the three hash comparisons
+            disagrees -- two executions of the same seed produced
+            different artifacts, which Requirement 18.7 forbids.
+    """
+    from infra.readiness import DETERMINISM_KIND, append_ledger_entry
+
+    if first.seed != second.seed:
+        raise ValueError(
+            f"record_seed_determinism compares two executions of the SAME seed; "
+            f"got seed={first.seed!r} and seed={second.seed!r}"
+        )
+
+    mismatches: list[str] = []
+    if first.resolved_config_hash != second.resolved_config_hash:
+        mismatches.append("resolved_config_hash")
+    if first.split_hash != second.split_hash:
+        mismatches.append("split_hash")
+    if first.checkpoint_hashes != second.checkpoint_hashes:
+        mismatches.append("checkpoint_hashes")
+
+    if mismatches:
+        raise NonDeterminismError(
+            f"seed {first.seed}: two executions from an unchanged ResolvedConfig "
+            f"produced different artifact hash(es) for: {', '.join(mismatches)}. "
+            "This is the non-determinism Requirement 18.7 forbids."
+        )
+
+    replication_root = Path(results_root) / "replication"
+    combined_hash = "|".join(
+        (first.resolved_config_hash, first.split_hash, *(h for _, h in first.checkpoint_hashes))
+    )
+    return append_ledger_entry(
+        replication_root, DETERMINISM_KIND, str(first.seed), combined_hash
+    )
+
+
+class NonDeterminismError(Exception):
+    """Raised by `record_seed_determinism` when two executions of the same
+    seed from an unchanged `ResolvedConfig` produced different artifact
+    hashes (Requirement 18.7)."""
+
+
+def write_replication_summary(summary: ReplicationSummary, results_root: Path) -> Path:
+    """Write `aggregate`'s output to
+    `results_root / "replication" / "replication_summary.json"`.
+
+    A thin, separate function (not folded into `aggregate` itself) so
+    `aggregate`'s own unit tests can exercise the pure aggregation logic
+    without touching the filesystem.
+    """
+    path = Path(results_root) / "replication" / "replication_summary.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(summary.to_dict(), indent=2, sort_keys=True, default=str))
+    return path
+
+
+def aggregate(
+    seed_results: Sequence[SeedResult],
+    criterion: StabilityCriterion = CROSS_SEED_STABILITY_CRITERION,
+    sensitivity_overall_stabilities: Sequence[str] | None = None,
+) -> ReplicationSummary:
+    """Combine every seed's result into one cross-seed summary
+    (Requirement 9.4-9.8).
+
+    No code path here selects a best or worst seed: the only input is
+    the full `seed_results` tuple, and `ReplicationSummary.seed_results`
+    retains every one of them unchanged, in every branch, including
+    `"directionally_unstable"` (Requirement 9.5, 9.8).
+
+    Args:
+        seed_results: every seed's `SeedResult`, in any order. Not
+            required to be exactly five -- a test may pass fewer; the
+            production caller passes exactly the five frozen seeds'
+            results, and `criterion.total_seeds` documents that
+            expectation without this function enforcing it (a shorter
+            sequence stays mechanically well-defined: fewer seeds to
+            agree, same arithmetic).
+        criterion: the frozen cross-seed stability criterion
+            (`CROSS_SEED_STABILITY_CRITERION` by default; a test may pass
+            a different one to exercise the aggregation logic at other
+            thresholds -- see `StabilityCriterion`'s own docstring).
+        sensitivity_overall_stabilities: each seed's
+            `evaluation.robustness.SensitivityStabilityResult.overall_stability`
+            string (`"stable"` / `"unstable"` / `"undetermined"`), in the
+            same order as `seed_results`, or `None` if not supplied (in
+            which case the sensitivity-contradiction half of the
+            criterion is skipped and stability is determined from seed
+            agreement alone -- a documented simplification, since
+            `SeedResult` does not itself carry this field at this task's
+            scope; see that dataclass's docstring).
+
+    Returns:
+        A `ReplicationSummary`.
+    """
+    from evaluation.metrics import effect_direction_agreement
+
+    estimates = [r.primary_estimate for r in seed_results if r.primary_estimate is not None]
+
+    if not estimates:
+        mean = median = std_dev = None
+        value_range = None
+        direction_agreement_count = 0
+    else:
+        n = len(estimates)
+        mean = sum(estimates) / n
+        sorted_estimates = sorted(estimates)
+        mid = n // 2
+        median = (
+            sorted_estimates[mid]
+            if n % 2 == 1
+            else (sorted_estimates[mid - 1] + sorted_estimates[mid]) / 2.0
+        )
+        variance = sum((x - mean) ** 2 for x in estimates) / n
+        std_dev = variance**0.5
+        value_range = (min(estimates), max(estimates))
+        direction_agreement_count = sum(
+            1
+            for r in seed_results
+            if r.primary_estimate is not None
+            and effect_direction_agreement(r.primary_estimate, mean)
+        )
+
+    seeds_agree = (
+        mean is not None and direction_agreement_count >= criterion.min_agreeing_seeds
+    )
+
+    sensitivity_contradicts = False
+    if criterion.require_no_contradicting_sensitivity_variant and sensitivity_overall_stabilities:
+        sensitivity_contradicts = any(
+            status == "unstable" for status in sensitivity_overall_stabilities
+        )
+
+    if mean is None:
+        # No seed produced a usable estimate at all -- there is no
+        # aggregate direction to agree or disagree with, so this is
+        # neither "stable" nor "directionally_unstable" (both presuppose
+        # a direction exists); `design.md` Section 4.4's third literal.
+        stability_determination = "undetermined"
+    elif seeds_agree and not sensitivity_contradicts:
+        stability_determination = "stable"
+    else:
+        stability_determination = "directionally_unstable"
+
+    return ReplicationSummary(
+        seed_results=tuple(seed_results),
+        mean=mean,
+        median=median,
+        std_dev=std_dev,
+        value_range=value_range,
+        direction_agreement_count=direction_agreement_count,
+        stability_criterion=criterion.criterion_description,
+        stability_determination=stability_determination,
+    )

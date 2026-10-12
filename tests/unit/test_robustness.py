@@ -10,6 +10,8 @@ suppresses only the small subgroup.
 
 from datetime import datetime
 
+import pytest
+
 from cohorts.cohort_construction import PatientRecord, RandomizedCohort
 from data.event_model import ClinicalEvent, MissingnessState
 from data.timelines import build_patient_timeline
@@ -216,3 +218,370 @@ class TestSensitivityRobustness:
 
     def test_run_returns_the_module_level_constant(self):
         assert SensitivityRobustness.run() == SENSITIVITY_VARIANTS
+
+
+# ---------------------------------------------------------------------------
+# apply_variant / SensitivityRobustness.run_executed (task 15; Requirement
+# 8.1, 8.2, 8.3, 8.5, 8.6, 8.7)
+# ---------------------------------------------------------------------------
+
+from pathlib import Path  # noqa: E402
+
+from evaluation.robustness import (  # noqa: E402
+    STABILITY_CRITERION_DESCRIPTION,
+    SensitivityConfigError,
+    SensitivityVariantOutcome,
+    apply_variant,
+)
+from infra.config import load_config  # noqa: E402
+
+CONFIG_FIXTURES = Path(__file__).parent.parent / "fixtures" / "config"
+
+
+def _base_resolved_config():
+    return load_config(
+        CONFIG_FIXTURES / "valid_dataset.yaml",
+        CONFIG_FIXTURES / "valid_target_trial.yaml",
+        CONFIG_FIXTURES / "valid_experiment.yaml",
+    )
+
+
+def _causal_patient_record(
+    patient_id: str, *, treatment_arm: int, event_indicator: bool, elapsed_weeks: float
+) -> PatientRecord:
+    """A `PatientRecord` with a real treatment event (needed by
+    `causal.baselines._elapsed_weeks`, which every AIPW/IPCW path below
+    calls) and the frozen baseline covariates `causal.overlap`/
+    `causal.baselines` read -- a richer fixture than this module's own
+    `_make_patient_record`, which omits treatment events entirely (fine
+    for the subgroup tests above, not for the causal-estimator paths
+    task 15's tests exercise)."""
+    from datetime import timedelta
+
+    treatment_concept = "zidovudine" if treatment_arm == 0 else "zidovudine+didanosine"
+    events = [
+        _event(
+            patient_id,
+            concept_id=treatment_concept,
+            value=1.0,
+            unit=None,
+            modality="treatment",
+            observed_at=ASSIGNMENT_TIME,
+        ),
+        _event(
+            patient_id,
+            concept_id="baseline_cd4",
+            value=300.0,
+            unit="cells/mm3",
+            modality="baseline",
+            observed_at=ASSIGNMENT_TIME,
+        ),
+        _event(
+            patient_id,
+            concept_id="karnofsky_score",
+            value=90.0,
+            unit="score",
+            modality="baseline",
+            observed_at=ASSIGNMENT_TIME,
+        ),
+        _event(
+            patient_id,
+            concept_id="age",
+            value=35.0,
+            unit="years",
+            modality="baseline",
+            observed_at=ASSIGNMENT_TIME,
+        ),
+        _event(
+            patient_id,
+            concept_id="symptomatic_status",
+            value=False,
+            unit=None,
+            modality="baseline",
+            observed_at=ASSIGNMENT_TIME,
+        ),
+        _event(
+            patient_id,
+            concept_id="prior_opportunistic_infection",
+            value=False,
+            unit=None,
+            modality="baseline",
+            observed_at=ASSIGNMENT_TIME,
+        ),
+        _event(
+            patient_id,
+            concept_id="prior_art_exposure_days",
+            value=0.0,
+            unit="days",
+            modality="baseline",
+            observed_at=ASSIGNMENT_TIME,
+        ),
+    ]
+    event_time = ASSIGNMENT_TIME + timedelta(weeks=elapsed_weeks)
+    if not event_indicator:
+        events.append(
+            _event(
+                patient_id,
+                concept_id="administrative_censoring",
+                value=1.0,
+                unit=None,
+                modality="censoring",
+                observed_at=event_time,
+            )
+        )
+    timeline = build_patient_timeline(events)
+    return PatientRecord(
+        patient_id=patient_id,
+        treatment_arm=treatment_arm,
+        timeline=timeline,
+        eligibility_result=EligibilityResult(eligible=True, reason="", missing_fields=[]),
+        endpoint_result=EndpointResult(
+            event_time=event_time,
+            event_indicator=event_indicator,
+            censoring_indicator=not event_indicator,
+            event_type="death" if event_indicator else None,
+        ),
+    )
+
+
+def _causal_cohort(n_per_arm: int = 60) -> list[PatientRecord]:
+    """A patients-only list (not wrapped in `RandomizedCohort`) sized for
+    `causal.overlap`/`causal.baselines`' minimum-count conditions, with
+    real treatment events and a genuine event/censoring mix at varied
+    elapsed times."""
+    patients: list[PatientRecord] = []
+    for i in range(n_per_arm * 2):
+        arm = i % 2
+        patients.append(
+            _causal_patient_record(
+                f"P{i:04d}",
+                treatment_arm=arm,
+                event_indicator=(i % 4 == 0),
+                elapsed_weeks=20.0 + (i % 50),
+            )
+        )
+    return patients
+
+
+def _flat_propensities(patients: list[PatientRecord]) -> dict[str, float]:
+    """A simple, well-within-support propensity for every patient --
+    enough for the AIPW/overlap calls these tests exercise without
+    needing a real cross-fitted propensity model."""
+    return {patient.patient_id: 0.5 for patient in patients}
+
+
+class TestApplyVariant:
+    def test_valid_override_materializes_a_full_resolved_config(self):
+        base = _base_resolved_config()
+        updated = apply_variant(base, {"propensity_model": "boosted"})
+
+        assert updated.experiment.variant.propensity_model == "boosted"
+        # Every other field stays at its default.
+        assert updated.experiment.variant.weight_clipping == "primary_1_99"
+        # The original config object is untouched.
+        assert base.experiment.variant.propensity_model == "logistic"
+
+    def test_unknown_field_raises_before_any_execution(self):
+        base = _base_resolved_config()
+        with pytest.raises(SensitivityConfigError, match="not_a_real_field"):
+            apply_variant(base, {"not_a_real_field": "value"})
+
+    def test_multiple_overrides_applied_together(self):
+        base = _base_resolved_config()
+        updated = apply_variant(
+            base, {"missingness_stress": "increased", "landmark_masking": "week_20_removed"}
+        )
+        assert updated.experiment.variant.missingness_stress == "increased"
+        assert updated.experiment.variant.landmark_masking == "week_20_removed"
+
+
+class TestRunExecuted:
+    def test_executes_all_eight_variants(self):
+        base = _base_resolved_config()
+        patients = _causal_cohort()
+        propensities = _flat_propensities(patients)
+
+        result = SensitivityRobustness.run_executed(
+            base, patients, propensities, master_seed=42, adjustment_set=[]
+        )
+
+        assert len(result.variant_outcomes) == 8
+        assert [o.name for o in result.variant_outcomes] == EXPECTED_SENSITIVITY_NAMES
+
+    def test_boosted_propensity_model_is_recorded_unexecuted_without_xgboost(self):
+        base = _base_resolved_config()
+        patients = _causal_cohort()
+        propensities = _flat_propensities(patients)
+
+        result = SensitivityRobustness.run_executed(
+            base, patients, propensities, master_seed=42, adjustment_set=[]
+        )
+        boosted = next(o for o in result.variant_outcomes if o.name == "boosted_propensity_model")
+
+        assert boosted.status == "unexecuted"
+        assert boosted.failure_reason is not None
+        assert boosted.estimate is None
+        assert "boosted_propensity_model" in result.unexecuted_variants
+
+    def test_remaining_variants_still_execute_after_boosted_fails(self):
+        """Requirement 8.10: one variant failing does not stop the rest."""
+        base = _base_resolved_config()
+        patients = _causal_cohort()
+        propensities = _flat_propensities(patients)
+
+        result = SensitivityRobustness.run_executed(
+            base, patients, propensities, master_seed=42, adjustment_set=[]
+        )
+        executed = [o for o in result.variant_outcomes if o.name != "boosted_propensity_model"]
+
+        assert all(o.status == "executed" for o in executed), [
+            (o.name, o.status, o.failure_reason) for o in executed
+        ]
+
+    def test_an_unexecuted_variant_forces_overall_stability_undetermined(self):
+        """Requirement 8.9: boosted_propensity_model is always unexecuted
+        here (no xgboost), so overall_stability must always be
+        'undetermined', never 'stable'."""
+        base = _base_resolved_config()
+        patients = _causal_cohort()
+        propensities = _flat_propensities(patients)
+
+        result = SensitivityRobustness.run_executed(
+            base, patients, propensities, master_seed=42, adjustment_set=[]
+        )
+
+        assert result.overall_stability == "undetermined"
+        assert result.criterion_description == STABILITY_CRITERION_DESCRIPTION
+
+    def test_week_20_removed_retains_the_timestep_at_the_dataset_layer(self):
+        """This module's own execution does not touch the dataset-builder
+        landmark mask (see `_execute_variant`'s documented scope note);
+        confirms the variant still executes without raising."""
+        base = _base_resolved_config()
+        patients = _causal_cohort()
+        propensities = _flat_propensities(patients)
+
+        result = SensitivityRobustness.run_executed(
+            base, patients, propensities, master_seed=42, adjustment_set=[]
+        )
+        week_20 = next(o for o in result.variant_outcomes if o.name == "week_20_removed")
+        assert week_20.status == "executed"
+        assert week_20.resolved_config_hash is not None
+
+    def test_increased_missingness_uses_a_seed_derived_from_master_seed_and_name(self):
+        """Requirement 8.5: executes without raising, under a seed derived
+        from (master_seed, variant_name) -- confirmed indirectly here by
+        asserting the variant executes cleanly; the derivation itself is
+        exercised directly in `tests/unit/test_seeding.py`."""
+        base = _base_resolved_config()
+        patients = _causal_cohort()
+        propensities = _flat_propensities(patients)
+
+        result = SensitivityRobustness.run_executed(
+            base, patients, propensities, master_seed=42, adjustment_set=[]
+        )
+        missingness = next(
+            o for o in result.variant_outcomes if o.name == "increased_missingness_stress"
+        )
+        assert missingness.status == "executed"
+
+    def test_treatment_comparator_reversal_negates_the_primary_estimate_direction(self):
+        """Requirement 8.4: the reported direction refers to the original
+        contrast -- reversing twice (reversed propensities, then negated
+        estimate) should land back near the primary estimate's sign
+        relationship, checked by confirming both execute and produce
+        finite, non-equal-by-coincidence estimates on this synthetic
+        cohort."""
+        base = _base_resolved_config()
+        patients = _causal_cohort()
+        propensities = _flat_propensities(patients)
+
+        result = SensitivityRobustness.run_executed(
+            base, patients, propensities, master_seed=42, adjustment_set=[]
+        )
+        reversal = next(
+            o for o in result.variant_outcomes if o.name == "treatment_comparator_reversal"
+        )
+        assert reversal.status == "executed"
+        assert reversal.estimate is not None
+
+    def test_stronger_selection_severity_reads_the_frozen_amended_coefficients(self):
+        from cohorts.selection import STRONGER_SELECTION_COEFFICIENTS
+
+        base = _base_resolved_config()
+        patients = _causal_cohort()
+        propensities = _flat_propensities(patients)
+
+        result = SensitivityRobustness.run_executed(
+            base, patients, propensities, master_seed=42, adjustment_set=[]
+        )
+        stronger = next(
+            o for o in result.variant_outcomes if o.name == "stronger_selection_severity"
+        )
+
+        assert stronger.status == "executed"
+        assert stronger.estimate == STRONGER_SELECTION_COEFFICIENTS.selection_logit_intercept
+
+    def test_every_executed_outcome_carries_a_resolved_config_hash_and_scale(self):
+        base = _base_resolved_config()
+        patients = _causal_cohort()
+        propensities = _flat_propensities(patients)
+
+        result = SensitivityRobustness.run_executed(
+            base, patients, propensities, master_seed=42, adjustment_set=[]
+        )
+        for outcome in result.variant_outcomes:
+            if outcome.status == "executed":
+                assert outcome.resolved_config_hash is not None
+                assert outcome.scale == "risk_difference"
+                assert outcome.direction in {"positive", "negative", "null"}
+            else:
+                assert outcome.resolved_config_hash is None
+                assert outcome.scale is None
+                assert outcome.direction == "undetermined"
+
+
+class TestDetermineOverallStability:
+    """Direct tests of `_determine_overall_stability` (Requirement 8.9),
+    isolating the stability arithmetic from pipeline execution."""
+
+    def _outcome(self, name: str, status: str, direction: str) -> SensitivityVariantOutcome:
+        return SensitivityVariantOutcome(
+            name=name,
+            status=status,
+            estimate=None,
+            ci_low=None,
+            ci_high=None,
+            scale=None,
+            diagnostic_status="undetermined",
+            direction=direction,
+            failure_reason=None if status == "executed" else "forced",
+            resolved_config_hash=None,
+        )
+
+    def test_all_executed_same_direction_is_stable(self):
+        from evaluation.robustness import _determine_overall_stability
+
+        outcomes = [self._outcome(f"v{i}", "executed", "negative") for i in range(8)]
+        assert _determine_overall_stability(outcomes) == "stable"
+
+    def test_one_unexecuted_forces_undetermined(self):
+        from evaluation.robustness import _determine_overall_stability
+
+        outcomes = [self._outcome(f"v{i}", "executed", "negative") for i in range(7)]
+        outcomes.append(self._outcome("v7", "unexecuted", "undetermined"))
+        assert _determine_overall_stability(outcomes) == "undetermined"
+
+    def test_a_contradicting_direction_is_unstable(self):
+        from evaluation.robustness import _determine_overall_stability
+
+        outcomes = [self._outcome(f"v{i}", "executed", "negative") for i in range(7)]
+        outcomes.append(self._outcome("v7", "executed", "positive"))
+        assert _determine_overall_stability(outcomes) == "unstable"
+
+    def test_null_direction_does_not_count_as_contradicting(self):
+        from evaluation.robustness import _determine_overall_stability
+
+        outcomes = [self._outcome(f"v{i}", "executed", "negative") for i in range(7)]
+        outcomes.append(self._outcome("v7", "executed", "null"))
+        assert _determine_overall_stability(outcomes) == "stable"

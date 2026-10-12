@@ -305,6 +305,40 @@ def test_appending_every_kind_round_trips_into_a_ready_ledger(tmp_path):
     assert evaluate_readiness(load_ledger(tmp_path)).ready is True
 
 
+def test_readiness_also_requires_each_seed_in_determinism_verified(tmp_path):
+    """Task 18.2: `ReadinessLedger.executed_run_ids()` deliberately excludes
+    seeds (see that method's docstring -- a seed names a *repetition* of a
+    run, not a run id), so completing all five seeds, all twelve ablation
+    runs, and all eight sensitivity variants, with every run and variant
+    (but no seed) determinism-verified, is already enough for `ready`.
+    This test pins that exact boundary: seeds themselves do not have to
+    appear in `determinism_verified` for readiness (unlike runs/variants,
+    which Property 10 and the test above already cover) -- confirming
+    `scripts.run_replication.record_seed_determinism`'s own
+    `DETERMINISM_KIND` appends (keyed by seed) are additional evidence a
+    reviewer can inspect, not a readiness precondition this module
+    enforces for seeds specifically.
+    """
+    for seed in REQUIRED_SEEDS:
+        append_ledger_entry(tmp_path, SEED_KIND, seed, f"seed-hash-{seed}")
+    for run_id in REQUIRED_RUNS:
+        append_ledger_entry(tmp_path, ABLATION_RUN_KIND, run_id, f"run-hash-{run_id}")
+    for name in REQUIRED_VARIANTS:
+        append_ledger_entry(tmp_path, SENSITIVITY_VARIANT_KIND, name, f"var-hash-{name}")
+    for run_id in (*REQUIRED_RUNS, *REQUIRED_VARIANTS):
+        append_ledger_entry(tmp_path, DETERMINISM_KIND, run_id, f"verified-{run_id}")
+
+    assert evaluate_readiness(load_ledger(tmp_path)).ready is True
+
+    # Appending seed-keyed determinism entries too (what
+    # `record_seed_determinism` does in production) is additive and must
+    # not break readiness.
+    for seed in REQUIRED_SEEDS:
+        append_ledger_entry(tmp_path, DETERMINISM_KIND, str(seed), f"seed-verified-{seed}")
+
+    assert evaluate_readiness(load_ledger(tmp_path)).ready is True
+
+
 def test_appending_is_append_only_and_idempotent(tmp_path):
     append_ledger_entry(tmp_path, ABLATION_RUN_KIND, "no_overlap_gate", "hash-1")
     append_ledger_entry(tmp_path, ABLATION_RUN_KIND, "no_uncertainty_gate", "hash-2")

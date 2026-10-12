@@ -39,6 +39,36 @@ import pytest
 from infra.consumption_ledger import RESULTS_ROOT_ENV_VAR
 
 
+#: Registers `--run-locked-evaluation-test`, the suite-wide flag named by
+#: `design.md` ("The one test that touches the real locked-evaluation
+#: path is skipped by default, behind the parent spec's existing
+#: `--run-locked-evaluation-test` flag, mirroring production gating.") and
+#: by task 21.2. Mirrors the already-established `RUN_FULL_DIAGNOSTIC_SWEEP`
+#: environment-variable convention
+#: (`tests/diagnostics/test_positivity_and_negative_control.py`), but as a
+#: `pytest` CLI flag rather than an environment variable, since this gate
+#: is about which *test* runs, not about a runtime configuration value a
+#: test reads -- `pytest.mark.skipif` checking `request.config.getoption`
+#: is the standard mechanism for that distinction.
+#:
+#: Only one test in the whole suite is gated behind this flag: the single
+#: locked-evaluation path that would touch real (non-synthetic) artifacts
+#: end to end, per `design.md`'s own "No test mints a real token" rule --
+#: every other locked-evaluation test constructs a synthetic token over a
+#: synthetic cohort and runs unconditionally.
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption(
+        "--run-locked-evaluation-test",
+        action="store_true",
+        default=False,
+        help=(
+            "Run the single locked-evaluation test that touches the real "
+            "(non-synthetic) locked-evaluation path. Skipped by default, "
+            "mirroring production gating (design.md)."
+        ),
+    )
+
+
 @pytest.fixture(autouse=True)
 def isolated_reference_access_root(
     tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch

@@ -72,6 +72,19 @@ PRIMARY_COMPARISONS: tuple[str, ...] = (
     "gated_vs_ungated",
 )
 
+#: The frozen statistical plan's version identifier, bound into every
+#: `LockedEvaluationToken` (`neural-experiment-pipeline` Requirement 13.3)
+#: so a locked evaluation is traceable to the exact plan revision it ran
+#: under. `decisions.md` has no dedicated version field of its own; this
+#: identifies Section 19's content by its most recent amendment-log entry
+#: that touches it (dated 2026-09-07, the cross-seed stability criterion
+#: amendment -- see `decisions.md` Section 26's amendment-log table). Any
+#: future amendment to Section 19, the Holm comparison set, the bootstrap
+#: replicate count, or the cross-seed stability criterion must bump this
+#: string in the same change that amends `decisions.md`, so a token
+#: minted before the amendment is visibly bound to the prior plan.
+STATISTICAL_PLAN_VERSION: str = "decisions.md Section 19 (amended 2026-09-07)"
+
 
 def _percentile(sorted_values: Sequence[float], percentile: float) -> float:
     """Linear-interpolation percentile of an already-sorted sequence.
@@ -188,6 +201,87 @@ def paired_bootstrap_test(
         n_replicates=n_replicates,
         n_successful=len(replicate_estimates),
     )
+
+
+def paired_bootstrap_p_value(
+    comparison_name: str,
+    values_a: Sequence[float],
+    values_b: Sequence[float],
+    n_replicates: int = 1000,
+    seed: int = 0,
+) -> float:
+    """Two-sided bootstrap p-value for the paired difference `values_a -
+    values_b`, over one of the three frozen primary comparisons (task
+    21.1; feeds `holm_correction`'s `p_values` argument).
+
+    `decisions.md` Section 19 specifies the paired-bootstrap machinery and
+    "Holm correction for the three primary model comparisons" but does
+    not itself name a p-value formula -- `holm_correction` only takes
+    `p_values` as already-computed input (`design.md` Section 2.6 open
+    question 6: "whether the locked-evaluation runner calls them
+    directly or through a thin pairing adapter is unconstrained"). This
+    function is that adapter's p-value half, using the standard
+    bootstrap convention: the p-value is twice the smaller tail
+    proportion of replicate estimates on either side of zero (the null
+    of no difference), capped at `1.0`.
+
+    Deliberately a separate function from `paired_bootstrap_test` rather
+    than folding a p-value into `BootstrapCI` (which has no p-value
+    field and is shared by non-paired callers that have no comparable
+    null to test against). Called with the same `comparison_name`,
+    `values_a`, `values_b`, `n_replicates`, and `seed` as the
+    corresponding `paired_bootstrap_test` call, this function's own
+    `random.Random(seed)` instance draws the identical sequence of
+    shared resample indices, so the reported CI and p-value describe the
+    same bootstrap distribution even though each call resamples once
+    independently rather than sharing replicate state.
+
+    Args:
+        comparison_name: must be one of `PRIMARY_COMPARISONS` (Requirement
+            14.5).
+        values_a / values_b: as `paired_bootstrap_test`.
+        n_replicates: as `paired_bootstrap_test`.
+        seed: as `paired_bootstrap_test`; pass the same seed used for the
+            paired `paired_bootstrap_test` call to describe the same
+            bootstrap distribution.
+
+    Returns:
+        The two-sided bootstrap p-value in `[0, 1]`.
+
+    Raises:
+        ValueError: same conditions as `paired_bootstrap_test`.
+    """
+    if comparison_name not in PRIMARY_COMPARISONS:
+        raise ValueError(
+            f"comparison_name={comparison_name!r} is not one of the three frozen "
+            f"primary comparisons {PRIMARY_COMPARISONS!r} (decisions.md Section 19); "
+            f"an unprespecified comparison cannot enter the corrected family."
+        )
+    if len(values_a) != len(values_b):
+        raise ValueError(
+            f"values_a (len={len(values_a)}) and values_b (len={len(values_b)}) must "
+            f"have the same length -- this is a paired comparison on identical test "
+            f"patients."
+        )
+    if not values_a:
+        raise ValueError("paired_bootstrap_p_value requires non-empty values_a/values_b")
+
+    n = len(values_a)
+
+    def _mean_paired_diff(indices: Sequence[int]) -> float:
+        return sum(values_a[i] - values_b[i] for i in indices) / len(indices)
+
+    rng = random.Random(seed)
+    replicate_estimates: list[float] = []
+    for _ in range(n_replicates):
+        shared_indices = [rng.randrange(n) for _ in range(n)]
+        replicate_estimates.append(_mean_paired_diff(shared_indices))
+
+    n_total = len(replicate_estimates)
+    proportion_at_or_below_zero = sum(1 for v in replicate_estimates if v <= 0.0) / n_total
+    proportion_at_or_above_zero = sum(1 for v in replicate_estimates if v >= 0.0) / n_total
+    p_value = 2.0 * min(proportion_at_or_below_zero, proportion_at_or_above_zero)
+    return min(p_value, 1.0)
 
 
 def holm_correction(p_values: dict[str, float]) -> dict[str, float]:

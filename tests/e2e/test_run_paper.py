@@ -8,8 +8,12 @@ JSON file and a target-trial YAML, and asserts:
   files with valid JSON content under a temp output directory, and never
   creates or reads any sealed-reference-named file anywhere under a
   scratch results tree the test controls;
-- `--stage locked-evaluation` (with no valid token) always exits non-zero
-  with a clear message and creates no output files at all.
+- `--stage locked-evaluation` delegates to `run_locked_evaluation.main()`
+  and propagates its exit status unchanged (task 22); with no
+  `--token-artifact` supplied, that delegated script's own argument
+  parser refuses with a non-zero exit before any file is opened, and
+  this test confirms no output files are created and that the stale
+  "task 16 does not exist" refusal message appears nowhere.
 
 **Validates: Requirements 15.5, 15.6**
 """
@@ -112,6 +116,10 @@ def test_reproduction_stage_regenerates_tables_figures_and_model_card(tmp_path):
     scratch_results_root.mkdir()
     experiment_path = _write_experiment_json(tmp_path)
     output_dir = scratch_results_root / "paper_reproduction" / "reporting"
+    # task 23.2: --manuscript-dir defaults to the real paper/generated/;
+    # pointed at tmp_path here so this test never writes into the real
+    # manuscript package's working tree.
+    manuscript_dir = tmp_path / "manuscript_generated"
 
     result = _run_run_paper(
         [
@@ -121,6 +129,8 @@ def test_reproduction_stage_regenerates_tables_figures_and_model_card(tmp_path):
             str(experiment_path),
             "--output-dir",
             str(output_dir),
+            "--manuscript-dir",
+            str(manuscript_dir),
         ]
     )
 
@@ -177,29 +187,48 @@ def test_reproduction_stage_regenerates_tables_figures_and_model_card(tmp_path):
     assert _find_sealed_reference_files(scratch_results_root) == []
 
 
-def test_locked_evaluation_stage_is_refused_and_creates_no_output(tmp_path):
+def test_locked_evaluation_stage_delegates_and_propagates_nonzero_exit(tmp_path):
+    """With no `--token-artifact` (and none of `run_locked_evaluation.py`'s
+    other required flags) supplied, the delegated script's own argument
+    parser refuses before opening any file. `run_paper.py` itself never
+    touches `--trial`/`--experiment` for this stage (neither is passed
+    here at all), confirming they are not required for `--stage
+    locked-evaluation` (task 22)."""
     scratch_results_root = tmp_path / "results"
     scratch_results_root.mkdir()
-    experiment_path = _write_experiment_json(tmp_path)
     output_dir = scratch_results_root / "paper_reproduction" / "reporting"
 
-    result = _run_run_paper(
-        [
-            "--trial",
-            str(TRIAL_CONFIG),
-            "--experiment",
-            str(experiment_path),
-            "--output-dir",
-            str(output_dir),
-            "--stage",
-            "locked-evaluation",
-        ]
-    )
+    result = _run_run_paper(["--stage", "locked-evaluation"])
 
     assert result.returncode != 0
-    assert "locked-evaluation" in result.stderr.lower()
-    assert "LockedEvaluationToken" in result.stderr
 
-    # No output files at all -- the refusal happens before any file access.
+    # The stale "task 16 does not exist" refusal message no longer exists
+    # anywhere in this delegation path's output.
+    assert "task 16" not in result.stderr
+    assert "does not exist yet in this repository" not in result.stderr
+
+    # No output files at all -- run_paper.py itself never opens any file
+    # for this stage, and the delegated script refused before opening one.
     assert not output_dir.exists()
     assert _find_sealed_reference_files(scratch_results_root) == []
+
+
+def test_stale_refusal_message_appears_nowhere_in_the_codebase():
+    """Requirement 13.12's explicit prohibition: no message stating that
+    `scripts/check_go_no_go.py` is absent, or naming "task 16" as a
+    not-yet-landed dependency, may appear anywhere under `scripts/` or
+    `src/` now that both exist and task 22 has rewired the delegation."""
+    stale_fragments = (
+        "does not exist yet in this repository",
+        "task 16, which does not exist",
+    )
+    search_roots = [REPO_ROOT / "scripts", REPO_ROOT / "src"]
+    offending: list[str] = []
+    for root in search_roots:
+        for path in root.rglob("*.py"):
+            text = path.read_text(encoding="utf-8")
+            for fragment in stale_fragments:
+                if fragment in text:
+                    offending.append(f"{path}: {fragment!r}")
+
+    assert offending == [], f"stale refusal message found: {offending}"

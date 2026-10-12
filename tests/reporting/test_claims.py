@@ -54,9 +54,17 @@ import re
 from pathlib import Path
 from typing import Any
 
+from evaluation.statistics import PRIMARY_COMPARISONS
 from reporting.figures import build_architecture_diagram
 from reporting.model_card import build_model_card, to_markdown
-from reporting.tables import REQUIRED_COLUMNS, build_main_results_table
+from reporting.tables import (
+    REQUIRED_COLUMNS,
+    build_blocked_outcome_report,
+    build_executed_results_report,
+    build_headline_comparisons_table,
+    build_main_results_table,
+    build_negative_result_report,
+)
 
 _REPO_ROOT = Path(__file__).parent.parent.parent
 
@@ -277,3 +285,79 @@ def test_architecture_diagram_mermaid_text_is_clean():
 
     matches = scan_text_for_prohibited_claims(_flatten_to_text(diagram))
     assert matches == [], f"architecture diagram unexpectedly matched: {matches!r}"
+
+
+# ---------------------------------------------------------------------------
+# Test case 5: task 22.1/22.2's new generated-table/report builders must be
+# clean (Requirement 19.4's "restrict claims to the permitted set ... and
+# exclude the prohibited claims", applied mechanically here as it already
+# is to tables.py/figures.py above).
+# ---------------------------------------------------------------------------
+
+
+def _synthetic_headline_comparison_entry(**overrides):
+    entry = {
+        "split": "test",
+        "seed_set": (101, 202, 303, 404, 505),
+        "point_estimate": 0.1,
+        "ci_low": 0.0,
+        "ci_high": 0.2,
+    }
+    entry.update(overrides)
+    return entry
+
+
+def test_headline_comparisons_table_output_is_clean():
+    comparisons = {
+        name: _synthetic_headline_comparison_entry(p_value=0.02)
+        for name in PRIMARY_COMPARISONS
+    }
+    comparisons["intervention_encoder_vs_capacity_matched_placebo"] = (
+        _synthetic_headline_comparison_entry()
+    )
+    comparisons["complete_vs_no_protocol_and_no_treatment_input"] = {
+        "split": "test",
+        "seed_set": (101, 202, 303, 404, 505),
+        "sub_comparisons": {
+            "vs_no_protocol": _synthetic_headline_comparison_entry(),
+            "vs_no_treatment_input": _synthetic_headline_comparison_entry(),
+        },
+    }
+
+    table = build_headline_comparisons_table(comparisons)
+
+    matches = scan_text_for_prohibited_claims(_flatten_to_text(table))
+    assert matches == [], f"headline comparisons table unexpectedly matched: {matches!r}"
+
+
+def test_blocked_outcome_report_output_is_clean():
+    report = build_blocked_outcome_report(
+        released=False,
+        failing_conditions=["overlap_valid: fail", "causal_pass: fail (status='uncertain')"],
+        supported_count=187,
+        abstained_count=23,
+    )
+
+    matches = scan_text_for_prohibited_claims(_flatten_to_text(report))
+    assert matches == [], f"blocked outcome report unexpectedly matched: {matches!r}"
+
+
+def test_negative_result_report_output_is_clean():
+    """The frozen negative-result text itself (`decisions.md` Section 21)
+    is expected to be clean -- it is a permitted, documented finding, not
+    a prohibited claim; this confirms the scanner agrees."""
+    report = build_negative_result_report(factual_improved=True, recovery_improved=False)
+
+    matches = scan_text_for_prohibited_claims(_flatten_to_text(report))
+    assert matches == [], f"negative result report unexpectedly matched: {matches!r}"
+
+
+def test_executed_results_report_output_is_clean():
+    arms = [
+        {"name": "no_treatment_input", "estimate": 0.05, "contradicts_advantage": False},
+        {"name": "placebo_intervention_channel", "estimate": -0.02, "contradicts_advantage": True},
+    ]
+    report = build_executed_results_report(arms)
+
+    matches = scan_text_for_prohibited_claims(_flatten_to_text(report))
+    assert matches == [], f"executed results report unexpectedly matched: {matches!r}"

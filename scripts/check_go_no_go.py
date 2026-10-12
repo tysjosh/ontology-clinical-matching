@@ -36,29 +36,49 @@ A verifier returning `unverifiable` never blocks: absence of evidence is
 not evidence against, and the attestation remains the signal for those
 items by design.
 
-Token bindings are NOT wired yet (task 20 owns that)
------------------------------------------------------
+Token bindings (task 20)
+-------------------------
 
-`cohorts.sealed_reference.LockedEvaluationToken` now binds nine fields
+`cohorts.sealed_reference.LockedEvaluationToken` binds nine fields
 (`neural-experiment-pipeline` Requirement 13.3): `issued_by`, `issued_at`,
-and seven artifact bindings this script is the designated minter for. Task
-7 strengthened the token; **task 20 wires the real values into this
-script** -- computing the resolved-config hash, dataset checksum, split
-hash, per-checkpoint sha256s, git commit, statistical-plan version, and a
-fresh evaluation id, and refusing to mint if any of them is unavailable.
+and seven artifact bindings this script is the designated minter for.
+Task 7 strengthened the token; this task wires the real values in:
 
-Until then, this script mints with `UNWIRED_BINDING_PLACEHOLDER` in every
-one of the seven slots. This is deliberately *not* a plausible-looking
-value: it is a single, loudly-labeled sentinel string, so a token artifact
-produced today cannot be mistaken for one bound to real artifacts, and
-`scripts/run_locked_evaluation.py` (task 21) recomputing the bound hashes
-per Requirement 13.5 will mismatch on the first field and refuse. Nothing
-in this file pretends to know the real values.
+- `--resolved-config-hash`, `--dataset-checksum`, `--split-hash`,
+  `--git-commit` (auto-resolved via `infra.manifest.resolve_git_provenance`
+  unless overridden), `--statistical-plan-version` (defaults to
+  `evaluation.statistics.STATISTICAL_PLAN_VERSION`), and `--evaluation-id`
+  (auto-generated via `uuid.uuid4().hex` unless overridden, so a caller
+  never has to invent a fresh identifier by hand) are each a single
+  caller-supplied string.
+- `--checkpoint-hash NAME=SHA256` (repeatable, at least one required) --
+  one `(logical_name, sha256)` pair per frozen checkpoint the locked
+  evaluation will load.
 
-`--results-root` supplies the consumption ledger the mint checks for a
-duplicated `evaluation_id` (Requirement 13.4); its default is
-`checklist_verifiers.DEFAULT_RESULTS_ROOT`, the same `results/` tree the
-verifiers already read.
+Every one of these seven fields must resolve to a non-empty value before
+`_mint` is called; an absent one is refused by name alongside every other
+offender in the same message (Requirement 13.4), never a placeholder.
+There is no code path left in this script that mints with a sentinel
+value -- a caller that omits a required binding gets a refusal, not a
+token artifact with `UNWIRED_BINDING_PLACEHOLDER` written into it.
+
+Readiness gating (task 20; Requirement 18.3, 18.4)
+----------------------------------------------------
+
+The thirteenth checklist item, `neural_readiness_verified`, is never read
+as a human-attested boolean (`configs/go_no_go_checklist.yaml`'s own key
+of that name is ignored outright): it is always recomputed from
+`infra.readiness.evaluate_readiness(infra.readiness.load_ledger(results_root))`.
+When the ledger is not ready, minting is refused and every missing seed,
+ablation run, and sensitivity variant is named -- exactly the same
+`missing_items` strings `evaluate_readiness` itself produces, so this
+gate and the ledger's own evidence can never disagree about what is
+outstanding.
+
+`--results-root` supplies both the consumption ledger the mint checks for
+a duplicated `evaluation_id` (Requirement 13.4) and the readiness ledger
+read here; its default is `checklist_verifiers.DEFAULT_RESULTS_ROOT`, the
+same `results/` tree the verifiers already read.
 
 The eleven-name list quoted in the original task description undercounts
 by one -- counted individually, the parenthetical actually lists twelve
@@ -78,17 +98,20 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import uuid
 from pathlib import Path
 
 import yaml
 
-from cohorts.sealed_reference import LockedEvaluationToken
+from cohorts.sealed_reference import LockedEvaluationToken, TokenFieldError
 from infra.checklist_verifiers import (
     VerificationContext,
     VerifierResult,
     contradicted_items,
     verify_all,
 )
+from infra.manifest import resolve_git_provenance
+from infra.readiness import evaluate_readiness, load_ledger
 
 #: Repository root, resolved relative to this file's location (matches
 #: `scripts/run_stage.py` and `scripts/run_paper.py`'s convention).
@@ -97,17 +120,10 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 #: Default checklist config path.
 DEFAULT_CHECKLIST_PATH = REPO_ROOT / "configs" / "go_no_go_checklist.yaml"
 
-#: Stand-in for each of the seven artifact bindings Requirement 13.3
-#: requires, until task 20 computes them for real (see module docstring).
-#: One sentinel for every slot, loudly labeled, so a token minted today is
-#: recognizable on sight as unbound and fails task 21's Requirement-13.5
-#: hash recomputation immediately.
-UNWIRED_BINDING_PLACEHOLDER: str = "UNWIRED-PLACEHOLDER-see-task-20"
-
-#: The twelve frozen go/no-go checklist item names (`decisions.md` Section
-#: 21; task 16's parenthetical list, counted individually). This is the
-#: authoritative set: `load_checklist()` requires every one of these keys
-#: to be present, and `check_go_no_go()` only ever reports unmet items
+#: The twelve human-attested go/no-go checklist item names (`decisions.md`
+#: Section 21; task 16's parenthetical list, counted individually). This is
+#: the authoritative set: `load_checklist()` requires every one of these
+#: keys to be present, and `check_go_no_go()` only ever reports unmet items
 #: drawn from this set.
 CHECKLIST_ITEMS: tuple[str, ...] = (
     "frozen_protocol",
@@ -123,6 +139,16 @@ CHECKLIST_ITEMS: tuple[str, ...] = (
     "privacy_checks_passed",
     "one_command_reproduction_verified",
 )
+
+#: The thirteenth checklist item (task 20; Requirement 18.3, 18.4).
+#: Deliberately NOT a member of `CHECKLIST_ITEMS`: that tuple is the set of
+#: *human-attested* booleans `load_checklist` reads from the YAML file,
+#: while this item is always computed, never read as an attestation (see
+#: module docstring). Keeping it out of `CHECKLIST_ITEMS` means
+#: `load_checklist`'s "unknown item" check continues to reject it if a
+#: caller's checklist file tries to set it, and `check_go_no_go()`'s
+#: human-attested unmet-item logic never has to special-case it.
+NEURAL_READINESS_ITEM: str = "neural_readiness_verified"
 
 
 class ChecklistError(Exception):
@@ -163,12 +189,17 @@ def load_checklist(path: Path) -> dict[str, bool]:
     if not isinstance(items, dict):
         raise ChecklistError(f"{path}: 'items' must be a mapping")
 
-    known = set(CHECKLIST_ITEMS)
+    # `NEURAL_READINESS_ITEM` may be present (the shipped template carries
+    # it, so the checklist's thirteen-key shape stays uniform) but its
+    # value is accepted here and ignored everywhere else -- this function
+    # never returns it, and no caller reads it as an attestation (see
+    # module docstring).
+    known = set(CHECKLIST_ITEMS) | {NEURAL_READINESS_ITEM}
     unknown = sorted(set(items) - known)
     if unknown:
         raise ChecklistError(f"{path}: unknown checklist item(s): {', '.join(unknown)}")
 
-    missing = sorted(known - set(items))
+    missing = sorted(set(CHECKLIST_ITEMS) - set(items))
     if missing:
         raise ChecklistError(f"{path}: missing checklist item(s): {', '.join(missing)}")
 
@@ -196,6 +227,122 @@ def check_go_no_go(checklist: dict[str, bool]) -> tuple[bool, list[str]]:
     """
     unmet = [name for name in CHECKLIST_ITEMS if not checklist.get(name, False)]
     return (len(unmet) == 0, unmet)
+
+
+def check_neural_readiness(results_root: Path) -> tuple[bool, tuple[str, ...]]:
+    """Compute the thirteenth checklist item from the readiness ledger
+    (task 20; Requirement 18.3, 18.4).
+
+    Unlike `check_go_no_go`, this never reads an attestation: it is always
+    `infra.readiness.evaluate_readiness(infra.readiness.load_ledger(results_root))`,
+    so a human cannot mark readiness `true` by editing the YAML file (see
+    module docstring and `load_checklist`'s handling of
+    `NEURAL_READINESS_ITEM`).
+
+    Returns:
+        `(ready, missing_items)` -- `missing_items` is
+        `ReadinessDecision.missing_items` verbatim (every missing seed,
+        ablation run, sensitivity variant, and determinism verification),
+        so this gate's refusal message and the ledger's own evidence can
+        never disagree about what is outstanding.
+    """
+    decision = evaluate_readiness(load_ledger(results_root))
+    return decision.ready, decision.missing_items
+
+
+#: The seven artifact bindings this script is the designated minter for
+#: (Requirement 13.3), in `LockedEvaluationToken`'s declaration order
+#: minus `issued_by`/`issued_at` (which this script supplies itself, not
+#: from caller input).
+BINDABLE_FIELDS: tuple[str, ...] = (
+    "resolved_config_hash",
+    "dataset_checksum",
+    "split_hash",
+    "checkpoint_hashes",
+    "git_commit",
+    "statistical_plan_version",
+    "evaluation_id",
+)
+
+
+def collect_bindable_fields(args: argparse.Namespace) -> tuple[dict[str, object], list[str]]:
+    """Collect the seven bindable fields from CLI args, auto-resolving
+    `git_commit` and `evaluation_id` when not explicitly overridden
+    (task 20; Requirement 13.3, 13.4).
+
+    Returns:
+        `(bindings, offenders)`. `bindings` holds whatever could be
+        resolved (possibly a partial mapping); `offenders` names every
+        field that could not be resolved to a non-empty value, each with
+        a human-readable reason, in `BINDABLE_FIELDS` order. An empty
+        `offenders` list means every field in `bindings` is ready to pass
+        to `_mint`.
+    """
+    bindings: dict[str, object] = {}
+    offenders: list[str] = []
+
+    if args.resolved_config_hash:
+        bindings["resolved_config_hash"] = args.resolved_config_hash
+    else:
+        offenders.append("resolved_config_hash: not supplied (--resolved-config-hash)")
+
+    if args.dataset_checksum:
+        bindings["dataset_checksum"] = args.dataset_checksum
+    else:
+        offenders.append("dataset_checksum: not supplied (--dataset-checksum)")
+
+    if args.split_hash:
+        bindings["split_hash"] = args.split_hash
+    else:
+        offenders.append("split_hash: not supplied (--split-hash)")
+
+    if args.checkpoint_hash:
+        parsed_checkpoints: list[tuple[str, str]] = []
+        malformed_checkpoints: list[str] = []
+        for raw in args.checkpoint_hash:
+            name, sep, sha = raw.partition("=")
+            if not sep or not name.strip() or not sha.strip():
+                malformed_checkpoints.append(raw)
+                continue
+            parsed_checkpoints.append((name.strip(), sha.strip()))
+        if malformed_checkpoints:
+            offenders.append(
+                "checkpoint_hashes: malformed --checkpoint-hash value(s) "
+                f"(expected NAME=SHA256): {', '.join(malformed_checkpoints)}"
+            )
+        else:
+            bindings["checkpoint_hashes"] = tuple(parsed_checkpoints)
+    else:
+        offenders.append("checkpoint_hashes: not supplied (at least one --checkpoint-hash)")
+
+    if args.git_commit:
+        bindings["git_commit"] = args.git_commit
+    else:
+        provenance = resolve_git_provenance(REPO_ROOT)
+        if provenance.available and not provenance.dirty:
+            bindings["git_commit"] = provenance.commit
+        elif provenance.available and provenance.dirty:
+            offenders.append(
+                "git_commit: working tree is dirty (uncommitted paths: "
+                f"{', '.join(provenance.uncommitted_paths)}); commit before minting "
+                "(Requirement 15.3 -- a dirty tree is refused, not overridable)"
+            )
+        else:
+            offenders.append(f"git_commit: unavailable ({provenance.unavailable_reason})")
+
+    if args.statistical_plan_version:
+        bindings["statistical_plan_version"] = args.statistical_plan_version
+    else:
+        from evaluation.statistics import STATISTICAL_PLAN_VERSION
+
+        bindings["statistical_plan_version"] = STATISTICAL_PLAN_VERSION
+
+    if args.evaluation_id:
+        bindings["evaluation_id"] = args.evaluation_id
+    else:
+        bindings["evaluation_id"] = uuid.uuid4().hex
+
+    return bindings, offenders
 
 
 def format_verification_report(
@@ -291,7 +438,59 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Directory scanned by scripts/scan_exports.py for the "
-            "privacy_checks_passed verifier (default: results/)."
+            "privacy_checks_passed verifier, and read for the readiness "
+            "ledger and consumption ledger (default: results/)."
+        ),
+    )
+    # The seven bindable fields (task 20; Requirement 13.3).
+    parser.add_argument(
+        "--resolved-config-hash",
+        default=None,
+        help="infra.registry.canonical_json hash of this run's ResolvedConfig. Required.",
+    )
+    parser.add_argument(
+        "--dataset-checksum",
+        default=None,
+        help="The frozen dataset contract's checksum. Required.",
+    )
+    parser.add_argument(
+        "--split-hash",
+        default=None,
+        help="Hash of the frozen dev/val/test assignment. Required.",
+    )
+    parser.add_argument(
+        "--checkpoint-hash",
+        action="append",
+        default=None,
+        metavar="NAME=SHA256",
+        help=(
+            "One (logical_name, sha256) checkpoint binding. Repeatable; at least "
+            "one is required."
+        ),
+    )
+    parser.add_argument(
+        "--git-commit",
+        default=None,
+        help=(
+            "Override the auto-resolved git commit (default: resolved via "
+            "infra.manifest.resolve_git_provenance, refusing if the tree is dirty "
+            "or the commit is unavailable)."
+        ),
+    )
+    parser.add_argument(
+        "--statistical-plan-version",
+        default=None,
+        help=(
+            "Override the frozen statistical-plan version string (default: "
+            "evaluation.statistics.STATISTICAL_PLAN_VERSION)."
+        ),
+    )
+    parser.add_argument(
+        "--evaluation-id",
+        default=None,
+        help=(
+            "Override the auto-generated evaluation id (default: a fresh "
+            "uuid.uuid4().hex)."
         ),
     )
     return parser
@@ -350,22 +549,54 @@ def main(argv: list[str] | None = None) -> int:
             )
         return 1
 
-    # TASK 20: replace every UNWIRED_BINDING_PLACEHOLDER below with the real
-    # recomputed value, and refuse to mint (naming the field) when one is
-    # unavailable. See the module docstring: nothing here claims to know
-    # these values yet, and a token minted with the sentinel is rejected by
-    # task 21's Requirement-13.5 hash recomputation.
-    token = LockedEvaluationToken._mint(
-        issued_by="scripts/check_go_no_go.py",
-        resolved_config_hash=UNWIRED_BINDING_PLACEHOLDER,
-        dataset_checksum=UNWIRED_BINDING_PLACEHOLDER,
-        split_hash=UNWIRED_BINDING_PLACEHOLDER,
-        checkpoint_hashes=((UNWIRED_BINDING_PLACEHOLDER, UNWIRED_BINDING_PLACEHOLDER),),
-        git_commit=UNWIRED_BINDING_PLACEHOLDER,
-        statistical_plan_version=UNWIRED_BINDING_PLACEHOLDER,
-        evaluation_id=UNWIRED_BINDING_PLACEHOLDER,
-        results_root=context.results_root,
-    )
+    # Task 20 / Requirement 18.3, 18.4: the thirteenth, always-computed
+    # item. Checked after the twelve human-attested items so the report
+    # above (which only covers those twelve) has already printed, and
+    # before any bindable field is collected -- a not-ready ledger refuses
+    # minting regardless of whether the seven bindings would have resolved.
+    ready, missing_readiness_items = check_neural_readiness(context.results_root)
+    if not ready:
+        print(
+            "check_go_no_go: refusing to mint a LockedEvaluationToken: the "
+            f"readiness ledger at {context.results_root} is not ready "
+            f"({len(missing_readiness_items)} item(s) missing):",
+            file=sys.stderr,
+        )
+        for item in missing_readiness_items:
+            print(f"  - {item}", file=sys.stderr)
+        return 1
+
+    # Task 20 / Requirement 13.3, 13.4: collect the seven real artifact
+    # bindings. Any that could not be resolved is refused by name here,
+    # before `_mint` is ever called -- `_mint`'s own field validation is a
+    # second, independent check (e.g. a malformed `--evaluation-id`), not
+    # the only one.
+    bindings, binding_offenders = collect_bindable_fields(args)
+    if binding_offenders:
+        print(
+            "check_go_no_go: refusing to mint a LockedEvaluationToken: "
+            f"{len(binding_offenders)} bindable field offense(s):",
+            file=sys.stderr,
+        )
+        for offense in binding_offenders:
+            print(f"  - {offense}", file=sys.stderr)
+        return 1
+
+    try:
+        token = LockedEvaluationToken._mint(
+            issued_by="scripts/check_go_no_go.py",
+            resolved_config_hash=bindings["resolved_config_hash"],
+            dataset_checksum=bindings["dataset_checksum"],
+            split_hash=bindings["split_hash"],
+            checkpoint_hashes=bindings["checkpoint_hashes"],
+            git_commit=bindings["git_commit"],
+            statistical_plan_version=bindings["statistical_plan_version"],
+            evaluation_id=bindings["evaluation_id"],
+            results_root=context.results_root,
+        )
+    except TokenFieldError as exc:
+        print(f"check_go_no_go: refusing to mint a LockedEvaluationToken: {exc}", file=sys.stderr)
+        return 1
 
     if args.token_output is not None:
         args.token_output.parent.mkdir(parents=True, exist_ok=True)

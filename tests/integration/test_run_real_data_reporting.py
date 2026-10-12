@@ -121,6 +121,45 @@ def test_unsupported_metrics_are_explicit_nan_not_fabricated(experiment_json):
         assert isinstance(reason, str) and reason
 
 
+def test_headline_comparisons_are_named_but_unsupported_here(experiment_json):
+    """This script trains no neural model and holds no locked-evaluation
+    test-split pairing, so all five headline comparisons (task 22.1,
+    Requirement 17.1-17.5) are present and named but explicitly marked
+    unsupported here -- `scripts/run_locked_evaluation.py` is the real
+    call site that fills them in with paired-bootstrap results."""
+    from reporting.tables import HEADLINE_COMPARISON_NAMES
+
+    headline = experiment_json["headline_comparisons"]
+    assert set(headline) == set(HEADLINE_COMPARISON_NAMES)
+    for name, entry in headline.items():
+        assert entry["supported"] is False, name
+        assert isinstance(entry["reason"], str) and entry["reason"]
+
+
+def test_executed_results_includes_every_sensitivity_variant(experiment_json):
+    """Task 22.2 (Requirement 19.3): every one of the eight frozen
+    sensitivity variants appears in the payload's `executed_results`,
+    unfiltered."""
+    executed = experiment_json["executed_results"]
+    assert executed["n_arms"] == 8
+    names = {arm["name"] for arm in executed["arms"]}
+    assert len(names) == 8
+
+
+def test_blocked_outcome_present_only_when_the_real_release_decision_blocks(experiment_json):
+    """Task 22.2 (Requirement 19.1): since this script conservatively
+    supplies `uncertainty_valid=False` to the real six-way release gate
+    (see run_causal_analysis.py's own docstring), the gate never passes
+    here, so `blocked_outcome` is always present with every failing
+    condition and both population counts."""
+    assert "blocked_outcome" in experiment_json
+    blocked = experiment_json["blocked_outcome"]
+    assert blocked["blocked"] is True
+    assert len(blocked["failing_conditions"]) > 0
+    assert blocked["supported_count"] > 0
+    assert isinstance(blocked["abstained_count"], int)
+
+
 def test_risk_difference_error_is_never_computed_from_the_sealed_reference(experiment_json):
     """The sealed internal randomized reference must never be read to
     produce this column -- it is always NaN, with a reason explaining why
@@ -228,7 +267,13 @@ def test_run_paper_reproduction_succeeds_on_the_built_experiment_json(tmp_path):
     experiment_json_path = results_root / "real_data_experiment.json"
     experiment_json_path.write_text(json.dumps(payload, indent=2, default=str))
 
-    exit_code = run_reproduction(TRIAL_CONFIG_PATH, experiment_json_path, output_dir)
+    # task 23.2: manuscript_dir defaults to the real paper/generated/;
+    # pointed at tmp_path here so this test never writes into the real
+    # manuscript package's working tree.
+    manuscript_dir = tmp_path / "manuscript_generated"
+    exit_code = run_reproduction(
+        TRIAL_CONFIG_PATH, experiment_json_path, output_dir, manuscript_dir
+    )
 
     assert exit_code == 0
     assert (output_dir / "tables" / "main_results_table.json").is_file()

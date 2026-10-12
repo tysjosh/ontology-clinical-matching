@@ -23,10 +23,20 @@ Filenames and relative paths themselves are also checked (Requirement 1.11 /
 2.2's "filenames" clause): a filename matching a direct-identifier or
 secret field-name pattern is flagged even if the file's content is clean.
 
+Export paths this scanner is pointed at include
+`results/<experiment_id>/report/` (`src/reporting/`) and
+`results/<experiment_id>/audit/public/` (`src/witnesses/audit_io.py`, task
+17.1) -- the per-claim audit artifacts a suppressed estimate's redacted
+copy lives in. The sibling `results/<experiment_id>/audit/protected/`
+directory retains the real numeric value for a suppressed estimate and is
+never scanned for export, exactly like `reference/` (see `docs/data_access.md`
+Section 2).
+
 Usage:
 
     python scripts/scan_exports.py <directory>
     python scripts/scan_exports.py results/abc123deadbeef00/reporting/
+    python scripts/scan_exports.py results/abc123deadbeef00/audit/public/
 
 Exit code is 0 if no violations are found, 1 if any are found (or if the
 given path is not a directory), so this script is safe to wire into CI as a

@@ -49,9 +49,12 @@ What this script deliberately still does NOT do
   (`causal.baselines`) and the *predictive* Cox baseline
   (`models.non_neural_baseline.CoxBaseline`, already run by
   `run_stage.py --stage real_data_pipeline`) are exercised.
-- It does not run the ablation matrix (`scripts/run_ablations.py`) or the
-  robustness/sensitivity variants (`src/evaluation/robustness.py`) --
-  those remain separately scoped, deferred follow-ups.
+- It does not run the ablation matrix (`scripts/run_ablations.py`) --
+  that remains a separately scoped, deferred follow-up. It does run the
+  eight frozen sensitivity variants (`src/evaluation/robustness.py`'s
+  `SensitivityRobustness.run_executed`, task 15.1), persisting
+  `robustness/sensitivity_stability.json` and feeding the real
+  `overall_stability` boolean to the causal witness.
 - It does not unseal the internal randomized reference, mint a
   `LockedEvaluationToken`, or run `scripts/check_go_no_go.py` (task 16,
   which does not exist in this repository) -- the sealed reference is
@@ -73,6 +76,7 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -93,14 +97,20 @@ from cohorts.pipeline import run_observationalization_pipeline
 from cohorts.sealed_reference import unadjusted_cox_reference_estimator
 from data.loaders.actg175 import Actg175DataNotFoundError, load_actg175
 from data.loaders.actg175_adapter import raw_tables_to_pipeline_inputs
+from evaluation.release_gate import evaluate_release
+from evaluation.robustness import SensitivityRobustness, SensitivityStabilityResult
 from infra.config import ResolvedConfig, load_config
 from infra.manifest import ManifestPrivacyError, ManifestWriter, resolve_git_provenance
-from infra.registry import DuplicateExperimentError, ExperimentRegistry
+from infra.readiness import SENSITIVITY_VARIANT_KIND, append_ledger_entry
+from infra.registry import DuplicateExperimentError, ExperimentRegistry, canonical_json
 from infra.seeding import derive_seed
 from protocols.consistency_checker import PatientProtocolRecord
 from protocols.eligibility_dsl import PatientTimeline as EligibilityPatientTimeline
 from protocols.schema import TargetTrialSpec
+from uncertainty.bootstrap import BootstrapCI
 from witnesses.aggregation import AggregateDecision, WitnessPolicy, aggregate
+from witnesses.audit_io import write_audit_artifacts
+from witnesses.audit_report import build_audit_report
 from witnesses.causal import CausalWitness
 from witnesses.clinical import ClinicalWitness
 from witnesses.temporal import TemporalWitness, WitnessResult
@@ -264,6 +274,42 @@ def _run_temporal_witness(patients: list[PatientRecord], spec: TargetTrialSpec) 
     )
 
 
+def _split_hash(patient_ids: list[str]) -> str:
+    """A deterministic content hash of this run's retained dev-split
+    patient-id set, for the audit report's `split_hash` field (task
+    17.2). No shared split-hashing helper exists in this codebase yet
+    (`infra.registry.canonical_json` hashes a `ResolvedConfig`, not a
+    patient-id set) -- this is a small, local, order-independent hash
+    (sorted ids, joined, SHA-256) rather than a new shared module, since
+    no second caller needs it yet.
+    """
+    joined = "\n".join(sorted(patient_ids))
+    return hashlib.sha256(joined.encode("utf-8")).hexdigest()
+
+
+def _audit_bootstrap_ci(estimate: Any) -> BootstrapCI:
+    """Wrap one `causal.baselines.CausalEstimate` as a `BootstrapCI` for
+    `build_audit_report` (task 17.2).
+
+    This script does not run `uncertainty.bootstrap.patient_level_bootstrap`
+    over any of the six causal baselines -- that is a separately-scoped
+    concern (exercised by `causal.negative_controls`'s own inline bootstrap
+    and, eventually, the locked-evaluation runner's paired bootstrap). So
+    there is no real confidence interval to report here yet; `ci_low`/
+    `ci_high` are set to NaN and `n_replicates`/`n_successful` to `0`,
+    documented explicitly as a placeholder rather than silently reusing
+    the point estimate as a fake zero-width interval (which would read as
+    a real, if degenerate, computed CI).
+    """
+    return BootstrapCI(
+        point_estimate=estimate.estimate,
+        ci_low=float("nan"),
+        ci_high=float("nan"),
+        n_replicates=0,
+        n_successful=0,
+    )
+
+
 def run_causal_analysis(
     real_data_path: Path,
     trial_config_path: Path,
@@ -352,15 +398,28 @@ def run_causal_analysis(
 
     # 5. Witnesses.
     temporal_result = _run_temporal_witness(dev_patients, spec)
+
+    # Task 15.1: execute the eight frozen sensitivity variants and feed
+    # the real `overall_stability` boolean to the causal witness, in
+    # place of the hardcoded `sensitivity_stable=False` this script used
+    # before `evaluation.robustness.SensitivityRobustness.run_executed`
+    # existed. `undetermined` (any variant unexecuted, e.g.
+    # `boosted_propensity_model` without xgboost) maps to `False` exactly
+    # like the prior placeholder did -- it can never read as stability
+    # (Requirement 8.9) -- while a genuine `"stable"` determination now
+    # flows through for the first time.
+    sensitivity_result: SensitivityStabilityResult = SensitivityRobustness.run_executed(
+        resolved_config,
+        dev_patients,
+        cross_fitted.propensity_scores,
+        master_seed=master_seed,
+        adjustment_set=spec.adjustment_set,
+    )
+    sensitivity_stable = sensitivity_result.overall_stability == "stable"
+
     causal_result = CausalWitness.evaluate(
         overlap_report=overlap_report,
-        # No sensitivity-variant machinery exists yet (task 13.1 is a
-        # separately-scoped follow-up; see `witnesses.causal`'s module
-        # docstring) -- conservatively treated as NOT stable so this
-        # script never silently reports a pass this codebase cannot back
-        # up. A future caller wiring in real sensitivity variants should
-        # pass the real computed boolean instead of this constant.
-        sensitivity_stable=False,
+        sensitivity_stable=sensitivity_stable,
         negative_control_exposure_result=exposure_result,
         negative_control_outcome_result=outcome_result,
     )
@@ -369,6 +428,14 @@ def run_causal_analysis(
     )
     witness_results = [temporal_result, causal_result, clinical_result]
     aggregate_decision: AggregateDecision = aggregate(witness_results, WitnessPolicy.ALL_REQUIRED)
+
+    # Task 16: the real six-way `ReleaseDecision`, not the three-witness
+    # `aggregate_decision` alone -- `uncertainty_valid` has no computed
+    # value at this script's scope (task 16.1's ensemble/support-gate
+    # machinery is a neural-model concern this script does not touch), so
+    # it is conservatively supplied as `False`: a release gate this
+    # script cannot actually evaluate must never read as passing.
+    release_decision = evaluate_release(overlap_report, witness_results, uncertainty_valid=False)
 
     # 6. Register the experiment and persist real artifacts.
     #
@@ -403,6 +470,28 @@ def run_causal_analysis(
 
     reference_path = experiment_dir / "reference" / "internal_randomized_reference.sealed.json"
     result.sealed_reference.write_sealed_artifact(reference_path)
+
+    # Task 15.1: persist the machine-readable sensitivity-stability result
+    # (`design.md` Section 4.3) and append each executed variant name to
+    # the readiness ledger (Requirement 18.3). A variant's own
+    # `resolved_config_hash` (from `apply_variant`, computed per-variant
+    # inside `_execute_variant`) is what each ledger entry's
+    # `artifact_hash` attests to -- `None` for an unexecuted variant,
+    # which is recorded as the literal string `"unexecuted"` rather than
+    # skipped, so a reader of the ledger can see that the variant ran
+    # (attempted) even though it did not produce a usable hash.
+    robustness_dir = experiment_dir / "robustness"
+    robustness_dir.mkdir(parents=True, exist_ok=True)
+    (robustness_dir / "sensitivity_stability.json").write_text(
+        json.dumps(sensitivity_result.to_dict(), indent=2, sort_keys=True, default=str)
+    )
+    for outcome in sensitivity_result.variant_outcomes:
+        append_ledger_entry(
+            experiment_dir,
+            SENSITIVITY_VARIANT_KIND,
+            outcome.name,
+            outcome.resolved_config_hash or "unexecuted",
+        )
 
     manifest = ManifestWriter(
         experiment_id=experiment_id,
@@ -444,6 +533,8 @@ def run_causal_analysis(
             "negative_control_outcome": outcome_result.classification,
             "witness_outcomes": {r.witness: r.status for r in witness_results},
             "aggregate_decision_passed": aggregate_decision.passed,
+            "sensitivity_overall_stability": sensitivity_result.overall_stability,
+            "sensitivity_unexecuted_variants": list(sensitivity_result.unexecuted_variants),
         }
     )
     manifest_path = experiment_dir / "manifest.json"
@@ -451,6 +542,101 @@ def run_causal_analysis(
         manifest.write(manifest_path)
     except ManifestPrivacyError as exc:
         raise RuntimeError(f"manifest privacy scan blocked the write: {exc}") from exc
+
+    # Task 17.2: build and write a public/protected audit-artifact pair
+    # for every candidate estimate this run produced -- all six causal
+    # baselines, released or suppressed alike (Requirement 12.1, 12.2).
+    # None of them has a neural checkpoint, so `checkpoint_hashes={}`
+    # (explicitly empty, not omitted -- see `build_audit_report`'s
+    # docstring).
+    split_hash = _split_hash([patient.patient_id for patient in dev_patients])
+    supported_count = len(dev_patients)
+    abstained_count = 0  # this script has no patient-level support gate.
+    for estimate in causal_estimates:
+        audit_report = build_audit_report(
+            protocol=spec,
+            population={"description": "ACTG175 dev-split retained cohort", "n": supported_count},
+            treatment={
+                "intervention": spec.intervention.concept_id,
+                "comparator": spec.comparator.concept_id,
+            },
+            estimate=_audit_bootstrap_ci(estimate),
+            overlap=overlap_report,
+            witness_results=witness_results,
+            abstentions=[],
+            violations=[],
+            provenance={
+                "experiment_id": experiment_id,
+                "seed": master_seed,
+                "commit": provenance.commit,
+            },
+            release_decision=release_decision,
+            estimate_status="released" if release_decision.released else "suppressed",
+            dataset_checksum=tables.checksum_sha256,
+            split_hash=split_hash,
+            resolved_config_hash=canonical_json(resolved_config),
+            checkpoint_hashes={},
+            seed=master_seed,
+            sensitivity_variant=None,
+            supported_count=supported_count,
+            abstained_count=abstained_count,
+        )
+        write_audit_artifacts(audit_report, experiment_dir, claim_id=estimate.name)
+
+    # Task 17.2: the sensitivity runner's own candidate estimates --
+    # `SensitivityRobustness.run_executed`'s eight variants, including
+    # the one that failed to execute (`boosted_propensity_model` without
+    # xgboost), get an audit report too. An unexecuted variant's estimate
+    # is `None`, and `estimate_status` is forced to `"suppressed"`
+    # regardless of `release_decision` -- there is no numeric estimate to
+    # release in the first place.
+    for outcome in sensitivity_result.variant_outcomes:
+        sensitivity_estimate = (
+            BootstrapCI(
+                point_estimate=outcome.estimate,
+                ci_low=outcome.ci_low if outcome.ci_low is not None else float("nan"),
+                ci_high=outcome.ci_high if outcome.ci_high is not None else float("nan"),
+                n_replicates=0,
+                n_successful=0,
+            )
+            if outcome.status == "executed"
+            else None
+        )
+        sensitivity_audit_report = build_audit_report(
+            protocol=spec,
+            population={"description": "ACTG175 dev-split retained cohort", "n": supported_count},
+            treatment={
+                "intervention": spec.intervention.concept_id,
+                "comparator": spec.comparator.concept_id,
+            },
+            estimate=sensitivity_estimate,
+            overlap=overlap_report,
+            witness_results=witness_results,
+            abstentions=[],
+            violations=[],
+            provenance={
+                "experiment_id": experiment_id,
+                "seed": master_seed,
+                "commit": provenance.commit,
+            },
+            release_decision=release_decision,
+            estimate_status=(
+                "suppressed"
+                if outcome.status == "unexecuted"
+                else ("released" if release_decision.released else "suppressed")
+            ),
+            dataset_checksum=tables.checksum_sha256,
+            split_hash=split_hash,
+            resolved_config_hash=outcome.resolved_config_hash or canonical_json(resolved_config),
+            checkpoint_hashes={},
+            seed=master_seed,
+            sensitivity_variant=outcome.name,
+            supported_count=supported_count,
+            abstained_count=abstained_count,
+        )
+        write_audit_artifacts(
+            sensitivity_audit_report, experiment_dir, claim_id=f"sensitivity_{outcome.name}"
+        )
 
     temporal_violation_count = (
         temporal_result.evidence["baseline_precedes_treatment_and_no_future_leakage"][
@@ -478,6 +664,23 @@ def run_causal_analysis(
         "temporal_violation_count": temporal_violation_count,
         "protocol_violation_count": protocol_violation_count,
         "witness_detected_failure_count": witness_detected_failure_count,
+        "sensitivity_overall_stability": sensitivity_result.overall_stability,
+        "sensitivity_unexecuted_variants": list(sensitivity_result.unexecuted_variants),
+        # Task 22.2 (Requirement 19.1, 19.3): the real six-way release
+        # decision's failing-condition names (empty when it passed) and
+        # every sensitivity variant's full per-variant result (name,
+        # status, estimate, direction, etc.), including variants whose
+        # direction contradicts the primary estimate's -- `release_gate.py`
+        # and `evaluation.robustness` already compute both; this just
+        # surfaces them on the summary rather than only the aggregated
+        # booleans/names this dict already carried.
+        "release_decision_released": release_decision.released,
+        "release_decision_reasons": list(release_decision.reasons),
+        "supported_count": supported_count,
+        "abstained_count": abstained_count,
+        "sensitivity_variant_outcomes": [
+            outcome.to_dict() for outcome in sensitivity_result.variant_outcomes
+        ],
     }
 
 
@@ -558,6 +761,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"negative_control_outcome: {summary['negative_control_outcome']}")
     print(f"witness_outcomes: {summary['witness_outcomes']}")
     print(f"aggregate_decision_passed: {summary['aggregate_decision_passed']}")
+    print(f"sensitivity_overall_stability: {summary['sensitivity_overall_stability']}")
+    print(f"sensitivity_unexecuted_variants: {summary['sensitivity_unexecuted_variants']}")
     print(f"manifest written to: {summary['manifest_path']}")
     print(f"sealed reference written to: {summary['reference_path']}")
     print("run_causal_analysis.py succeeded")

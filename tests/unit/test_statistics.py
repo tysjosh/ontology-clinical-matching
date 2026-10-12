@@ -9,6 +9,7 @@ from evaluation.statistics import (
     PRIMARY_COMPARISONS,
     assess_predictive_causal_association,
     holm_correction,
+    paired_bootstrap_p_value,
     paired_bootstrap_test,
 )
 
@@ -154,6 +155,91 @@ def test_paired_bootstrap_requires_equal_length_sequences():
 def test_paired_bootstrap_requires_non_empty_sequences():
     with pytest.raises(ValueError):
         paired_bootstrap_test("baseline_vs_intervention_aware", [], [])
+
+
+# ---------------------------------------------------------------------------
+# paired_bootstrap_p_value (task 21.1).
+# ---------------------------------------------------------------------------
+
+
+def test_paired_bootstrap_p_value_rejects_unprespecified_comparison():
+    with pytest.raises(ValueError):
+        paired_bootstrap_p_value("not_a_real_comparison", [1.0, 2.0], [0.5, 0.5])
+
+
+def test_paired_bootstrap_p_value_requires_equal_length_sequences():
+    with pytest.raises(ValueError):
+        paired_bootstrap_p_value("baseline_vs_intervention_aware", [1.0, 2.0], [1.0, 2.0, 3.0])
+
+
+def test_paired_bootstrap_p_value_requires_non_empty_sequences():
+    with pytest.raises(ValueError):
+        paired_bootstrap_p_value("baseline_vs_intervention_aware", [], [])
+
+
+def test_paired_bootstrap_p_value_is_near_zero_for_a_consistent_large_difference():
+    """Every per-index difference is strongly positive (9, 19, 29), so
+    every bootstrap replicate's mean difference is also strongly
+    positive; the two-sided p-value against a null of zero difference
+    must be at (or very near) zero."""
+    values_a = [10.0, 20.0, 30.0]
+    values_b = [1.0, 1.0, 1.0]
+
+    p_value = paired_bootstrap_p_value(
+        "baseline_vs_intervention_aware", values_a, values_b, n_replicates=500, seed=0
+    )
+
+    assert p_value == pytest.approx(0.0, abs=1e-9)
+
+
+def test_paired_bootstrap_p_value_is_near_one_for_identical_sequences():
+    """Every per-index difference is exactly zero, so every replicate's
+    mean difference is also exactly zero; both tail proportions are 1.0,
+    giving a p-value of 1.0 (capped)."""
+    values = [10.0, 20.0, 30.0]
+
+    p_value = paired_bootstrap_p_value(
+        "baseline_vs_intervention_aware", values, values, n_replicates=200, seed=0
+    )
+
+    assert p_value == pytest.approx(1.0)
+
+
+def test_paired_bootstrap_p_value_is_bounded_in_zero_one():
+    import random
+
+    rng = random.Random(42)
+    values_a = [rng.uniform(-5, 5) for _ in range(20)]
+    values_b = [rng.uniform(-5, 5) for _ in range(20)]
+
+    p_value = paired_bootstrap_p_value(
+        "intervention_aware_vs_ipcw_aipw", values_a, values_b, n_replicates=300, seed=1
+    )
+
+    assert 0.0 <= p_value <= 1.0
+
+
+def test_paired_bootstrap_p_value_feeds_holm_correction_directly():
+    """Confirms the intended composition: compute all three comparisons'
+    p-values, then pass the resulting dict straight to `holm_correction`."""
+    import random
+
+    rng = random.Random(7)
+    p_values = {
+        name: paired_bootstrap_p_value(
+            name,
+            [rng.uniform(-1, 1) for _ in range(15)],
+            [rng.uniform(-1, 1) for _ in range(15)],
+            n_replicates=200,
+            seed=idx,
+        )
+        for idx, name in enumerate(PRIMARY_COMPARISONS)
+    }
+
+    adjusted = holm_correction(p_values)
+
+    assert set(adjusted) == set(PRIMARY_COMPARISONS)
+    assert all(0.0 <= value <= 1.0 for value in adjusted.values())
 
 
 # ---------------------------------------------------------------------------

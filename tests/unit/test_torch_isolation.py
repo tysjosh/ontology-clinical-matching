@@ -70,6 +70,7 @@ TORCH_FREE_MODULES = (
     "witnesses.clinical",
     "witnesses.aggregation",
     "witnesses.audit_report",
+    "witnesses.audit_io",
     "cohorts.pipeline",
     "cohorts.sealed_reference",
     "evaluation.metrics",
@@ -88,6 +89,13 @@ TORCH_FREE_MODULES = (
     # here because task 7.1's locked-evaluation runner imports it directly.
     "infra.consumption_ledger",
     "scripts.scan_exports",
+    "scripts.check_go_no_go",
+    # The locked-evaluation runner itself (task 21): it must reach every
+    # verification step -- option rejection, token loading, consumption
+    # check, hash recomputation, occupied-path check -- before it ever
+    # needs torch (which only the as-yet-unimplemented task 21.1
+    # evaluation steps require).
+    "scripts.run_locked_evaluation",
 )
 
 #: Which task creates each module that does not exist yet, so a skip

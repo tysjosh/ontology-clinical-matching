@@ -47,7 +47,55 @@ if str(SCRIPTS_DIR) not in sys.path:
 import check_go_no_go  # noqa: E402  (import after sys.path manipulation, by design)
 
 from cohorts.sealed_reference import BOUND_TOKEN_FIELDS  # noqa: E402
+from infra.readiness import (  # noqa: E402
+    ABLATION_RUN_KIND,
+    DETERMINISM_KIND,
+    REQUIRED_SEEDS,
+    SEED_KIND,
+    SENSITIVITY_VARIANT_KIND,
+    append_ledger_entry,
+    required_ablation_run_ids,
+    required_sensitivity_variant_names,
+)
 from tests.token_fixtures import synthetic_token  # noqa: E402
+
+REQUIRED_RUNS = required_ablation_run_ids()
+REQUIRED_VARIANTS = required_sensitivity_variant_names()
+
+#: Minimum CLI args needed to resolve all seven bindable fields (task 20),
+#: minus `--results-root` (every test supplies its own `tmp_path`-scoped
+#: one). `--git-commit` is supplied explicitly here rather than left to
+#: auto-resolve: this repository's own working tree is routinely dirty
+#: during active development (as it is while this very test suite is
+#: being written), and this test module should not depend on that real,
+#: ambient git state. `test_main_refuses_to_mint_when_the_working_tree_is_dirty`
+#: covers the auto-resolution path directly, against a synthetic repo.
+BINDABLE_FIELD_ARGS: list[str] = [
+    "--resolved-config-hash",
+    "test-resolved-config-hash",
+    "--dataset-checksum",
+    "test-dataset-checksum",
+    "--split-hash",
+    "test-split-hash",
+    "--checkpoint-hash",
+    "intervention_aware=test-checkpoint-sha256",
+    "--git-commit",
+    "test-git-commit",
+]
+
+
+def _populate_ready_ledger(results_root) -> None:
+    """Write a complete, ready readiness ledger under `results_root`
+    (task 20's minting path refuses before even collecting bindable
+    fields when the ledger is not ready)."""
+    for seed in REQUIRED_SEEDS:
+        append_ledger_entry(results_root, SEED_KIND, seed, f"seed-hash-{seed}")
+    for run_id in REQUIRED_RUNS:
+        append_ledger_entry(results_root, ABLATION_RUN_KIND, run_id, f"run-hash-{run_id}")
+    for name in REQUIRED_VARIANTS:
+        append_ledger_entry(results_root, SENSITIVITY_VARIANT_KIND, name, f"var-hash-{name}")
+    for run_id in (*REQUIRED_RUNS, *REQUIRED_VARIANTS):
+        append_ledger_entry(results_root, DETERMINISM_KIND, run_id, f"verified-{run_id}")
 
 
 def _all_true() -> dict[str, bool]:
@@ -139,9 +187,19 @@ def test_main_exits_nonzero_and_does_not_mint_when_one_item_unmet(tmp_path, caps
 def test_main_mints_and_writes_token_when_all_items_pass(tmp_path, capsys):
     checklist_path = _write_checklist(tmp_path, _all_true())
     token_output = tmp_path / "token.json"
+    results_root = tmp_path / "results"
+    _populate_ready_ledger(results_root)
 
     exit_code = check_go_no_go.main(
-        ["--checklist", str(checklist_path), "--token-output", str(token_output)]
+        [
+            "--checklist",
+            str(checklist_path),
+            "--token-output",
+            str(token_output),
+            "--results-root",
+            str(results_root),
+            *BINDABLE_FIELD_ARGS,
+        ]
     )
 
     assert exit_code == 0
@@ -152,21 +210,26 @@ def test_main_mints_and_writes_token_when_all_items_pass(tmp_path, capsys):
     assert "issued_at" in token_data
 
 
-def test_token_artifact_records_every_bound_field_but_they_are_not_wired_yet(tmp_path):
-    """The artifact serializes all nine bindings (task 21's runner recomputes
-    them per Requirement 13.5), and the seven artifact bindings are still the
-    loudly-labeled placeholder task 20 replaces.
-
-    Asserting the placeholder explicitly is deliberate: it makes "these are
-    not real hashes yet" a checked fact rather than a comment, and this test
-    is the one task 20 must change when it wires the real values in.
-    """
+def test_token_artifact_records_real_bindable_field_values(tmp_path):
+    """Task 20: the seven artifact bindings are the caller-supplied real
+    values (or auto-resolved git commit/evaluation id), never a
+    placeholder sentinel."""
     checklist_path = _write_checklist(tmp_path, _all_true())
     token_output = tmp_path / "token.json"
+    results_root = tmp_path / "results"
+    _populate_ready_ledger(results_root)
 
     assert (
         check_go_no_go.main(
-            ["--checklist", str(checklist_path), "--token-output", str(token_output)]
+            [
+                "--checklist",
+                str(checklist_path),
+                "--token-output",
+                str(token_output),
+                "--results-root",
+                str(results_root),
+                *BINDABLE_FIELD_ARGS,
+            ]
         )
         == 0
     )
@@ -174,23 +237,34 @@ def test_token_artifact_records_every_bound_field_but_they_are_not_wired_yet(tmp
     token_data = json.loads(token_output.read_text())
     assert set(token_data) == set(BOUND_TOKEN_FIELDS)
 
-    placeholder = check_go_no_go.UNWIRED_BINDING_PLACEHOLDER
-    for name in (
-        "resolved_config_hash",
-        "dataset_checksum",
-        "split_hash",
-        "git_commit",
-        "statistical_plan_version",
-        "evaluation_id",
-    ):
-        assert token_data[name] == placeholder
-    assert token_data["checkpoint_hashes"] == [[placeholder, placeholder]]
+    assert token_data["resolved_config_hash"] == "test-resolved-config-hash"
+    assert token_data["dataset_checksum"] == "test-dataset-checksum"
+    assert token_data["split_hash"] == "test-split-hash"
+    assert token_data["checkpoint_hashes"] == [["intervention_aware", "test-checkpoint-sha256"]]
+    # git_commit auto-resolved (not overridden): must be a real-looking
+    # commit identifier, never a placeholder sentinel.
+    assert token_data["git_commit"]
+    assert "PLACEHOLDER" not in token_data["git_commit"]
+    assert token_data["statistical_plan_version"]
+    assert "PLACEHOLDER" not in token_data["statistical_plan_version"]
+    # evaluation_id auto-generated (not overridden): a real uuid4 hex.
+    assert len(token_data["evaluation_id"]) == 32
 
 
 def test_main_without_token_output_still_succeeds_when_all_pass(tmp_path):
     checklist_path = _write_checklist(tmp_path, _all_true())
+    results_root = tmp_path / "results"
+    _populate_ready_ledger(results_root)
 
-    exit_code = check_go_no_go.main(["--checklist", str(checklist_path)])
+    exit_code = check_go_no_go.main(
+        [
+            "--checklist",
+            str(checklist_path),
+            "--results-root",
+            str(results_root),
+            *BINDABLE_FIELD_ARGS,
+        ]
+    )
 
     assert exit_code == 0
 
@@ -260,6 +334,8 @@ def test_main_still_mints_when_evidence_is_merely_unverifiable(tmp_path):
     """
     checklist_path = _write_checklist(tmp_path, _all_true())
     token_output = tmp_path / "token.json"
+    results_root = tmp_path / "results"
+    _populate_ready_ledger(results_root)
 
     exit_code = check_go_no_go.main(
         [
@@ -269,6 +345,9 @@ def test_main_still_mints_when_evidence_is_merely_unverifiable(tmp_path):
             str(token_output),
             "--decisions-path",
             str(tmp_path / "absent_decisions.md"),
+            "--results-root",
+            str(results_root),
+            *BINDABLE_FIELD_ARGS,
         ]
     )
 
@@ -331,3 +410,243 @@ def test_minted_token_unlocks_a_sealed_reference(tmp_path):
     internal_reference = sealed.unseal(token)
 
     assert internal_reference.cohort_size == 1
+
+
+# ---------------------------------------------------------------------------
+# Task 20: readiness gating and the seven bindable fields.
+# ---------------------------------------------------------------------------
+
+
+def test_check_neural_readiness_is_not_ready_on_an_empty_results_root(tmp_path):
+    ready, missing = check_go_no_go.check_neural_readiness(tmp_path / "results")
+
+    assert ready is False
+    assert len(missing) > 0
+
+
+def test_check_neural_readiness_is_ready_once_the_ledger_is_complete(tmp_path):
+    results_root = tmp_path / "results"
+    _populate_ready_ledger(results_root)
+
+    ready, missing = check_go_no_go.check_neural_readiness(results_root)
+
+    assert ready is True
+    assert missing == ()
+
+
+def test_main_refuses_to_mint_when_the_ledger_is_not_ready_even_with_all_items_true(
+    tmp_path, capsys
+):
+    """Task 20's required case: a not-ready readiness ledger blocks minting
+    even when all twelve human-attested checklist items are `true`."""
+    checklist_path = _write_checklist(tmp_path, _all_true())
+    token_output = tmp_path / "token.json"
+    results_root = tmp_path / "results"  # deliberately NOT populated
+
+    exit_code = check_go_no_go.main(
+        [
+            "--checklist",
+            str(checklist_path),
+            "--token-output",
+            str(token_output),
+            "--results-root",
+            str(results_root),
+            *BINDABLE_FIELD_ARGS,
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code != 0
+    assert not token_output.exists()
+    assert "readiness ledger" in captured.err
+    assert "missing_seed:101" in captured.err
+
+
+def test_main_refuses_when_resolved_config_hash_is_absent(tmp_path, capsys):
+    checklist_path = _write_checklist(tmp_path, _all_true())
+    results_root = tmp_path / "results"
+    _populate_ready_ledger(results_root)
+
+    args = [
+        "--checklist",
+        str(checklist_path),
+        "--results-root",
+        str(results_root),
+        "--dataset-checksum",
+        "test-dataset-checksum",
+        "--split-hash",
+        "test-split-hash",
+        "--checkpoint-hash",
+        "intervention_aware=test-checkpoint-sha256",
+        "--git-commit",
+        "test-git-commit",
+    ]
+    exit_code = check_go_no_go.main(args)
+
+    captured = capsys.readouterr()
+    assert exit_code != 0
+    assert "resolved_config_hash" in captured.err
+
+
+def test_main_refuses_when_no_checkpoint_hash_is_supplied(tmp_path, capsys):
+    checklist_path = _write_checklist(tmp_path, _all_true())
+    results_root = tmp_path / "results"
+    _populate_ready_ledger(results_root)
+
+    args = [
+        "--checklist",
+        str(checklist_path),
+        "--results-root",
+        str(results_root),
+        "--resolved-config-hash",
+        "test-resolved-config-hash",
+        "--dataset-checksum",
+        "test-dataset-checksum",
+        "--split-hash",
+        "test-split-hash",
+        "--git-commit",
+        "test-git-commit",
+    ]
+    exit_code = check_go_no_go.main(args)
+
+    captured = capsys.readouterr()
+    assert exit_code != 0
+    assert "checkpoint_hashes" in captured.err
+
+
+def test_main_refuses_on_a_malformed_checkpoint_hash(tmp_path, capsys):
+    checklist_path = _write_checklist(tmp_path, _all_true())
+    results_root = tmp_path / "results"
+    _populate_ready_ledger(results_root)
+
+    args = [
+        "--checklist",
+        str(checklist_path),
+        "--results-root",
+        str(results_root),
+        "--resolved-config-hash",
+        "test-resolved-config-hash",
+        "--dataset-checksum",
+        "test-dataset-checksum",
+        "--split-hash",
+        "test-split-hash",
+        "--checkpoint-hash",
+        "not-a-valid-pair-missing-equals-sign",
+        "--git-commit",
+        "test-git-commit",
+    ]
+    exit_code = check_go_no_go.main(args)
+
+    captured = capsys.readouterr()
+    assert exit_code != 0
+    assert "checkpoint_hashes" in captured.err
+
+
+def test_main_refuses_when_evaluation_id_is_already_consumed(tmp_path, capsys):
+    from infra.consumption_ledger import append_consumed
+
+    checklist_path = _write_checklist(tmp_path, _all_true())
+    results_root = tmp_path / "results"
+    _populate_ready_ledger(results_root)
+    append_consumed("already-used-id", results_root, result_directory="somewhere")
+
+    args = [
+        "--checklist",
+        str(checklist_path),
+        "--results-root",
+        str(results_root),
+        *BINDABLE_FIELD_ARGS,
+        "--evaluation-id",
+        "already-used-id",
+    ]
+    exit_code = check_go_no_go.main(args)
+
+    captured = capsys.readouterr()
+    assert exit_code != 0
+    assert "already-used-id" in captured.err or "already recorded as consumed" in captured.err
+
+
+def test_main_refuses_to_mint_when_the_working_tree_is_dirty(tmp_path, monkeypatch):
+    """Requirement 15.3: a dirty working tree, with uncommitted paths
+    listed, blocks minting when `--git-commit` is not explicitly
+    overridden -- exercised against a synthetic git repo, not the real
+    one (whose cleanliness this test must not depend on)."""
+    import subprocess
+
+    synthetic_repo = tmp_path / "synthetic_repo"
+    synthetic_repo.mkdir()
+    subprocess.run(["git", "init"], cwd=synthetic_repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"],
+        cwd=synthetic_repo,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Test"], cwd=synthetic_repo, check=True, capture_output=True
+    )
+    (synthetic_repo / "committed.txt").write_text("v1")
+    subprocess.run(
+        ["git", "add", "committed.txt"], cwd=synthetic_repo, check=True, capture_output=True
+    )
+    subprocess.run(
+        ["git", "commit", "-m", "init"], cwd=synthetic_repo, check=True, capture_output=True
+    )
+    (synthetic_repo / "committed.txt").write_text("v2 -- uncommitted change")
+
+    monkeypatch.setattr(check_go_no_go, "REPO_ROOT", synthetic_repo)
+
+    args = argparse_namespace_for_bindable_fields_without_git_commit()
+    bindings, offenders = check_go_no_go.collect_bindable_fields(args)
+
+    assert any("git_commit" in offense and "dirty" in offense for offense in offenders)
+    assert "ommitted.txt" in " ".join(offenders)  # trailing substring of "committed.txt"
+
+
+def argparse_namespace_for_bindable_fields_without_git_commit():
+    import argparse
+
+    return argparse.Namespace(
+        resolved_config_hash="test-resolved-config-hash",
+        dataset_checksum="test-dataset-checksum",
+        split_hash="test-split-hash",
+        checkpoint_hash=["intervention_aware=test-checkpoint-sha256"],
+        git_commit=None,
+        statistical_plan_version=None,
+        evaluation_id=None,
+    )
+
+
+def test_collect_bindable_fields_auto_resolves_statistical_plan_version_and_evaluation_id():
+    from evaluation.statistics import STATISTICAL_PLAN_VERSION
+
+    args = argparse_namespace_for_bindable_fields_without_git_commit()
+    args.git_commit = "test-git-commit"  # avoid depending on the real repo's cleanliness
+    bindings, offenders = check_go_no_go.collect_bindable_fields(args)
+
+    assert offenders == []
+    assert bindings["statistical_plan_version"] == STATISTICAL_PLAN_VERSION
+    assert len(bindings["evaluation_id"]) == 32  # uuid4().hex
+
+
+def test_collect_bindable_fields_names_every_offense_at_once():
+    import argparse
+
+    args = argparse.Namespace(
+        resolved_config_hash=None,
+        dataset_checksum=None,
+        split_hash=None,
+        checkpoint_hash=None,
+        git_commit="test-git-commit",
+        statistical_plan_version=None,
+        evaluation_id=None,
+    )
+    bindings, offenders = check_go_no_go.collect_bindable_fields(args)
+
+    offense_fields = {offense.split(":")[0] for offense in offenders}
+    assert offense_fields == {
+        "resolved_config_hash",
+        "dataset_checksum",
+        "split_hash",
+        "checkpoint_hashes",
+    }

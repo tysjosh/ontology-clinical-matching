@@ -24,17 +24,44 @@ while accidentally clobbering a completed run's outputs is (`design.md`
 Requirement 1.7 requires the registry to record: experiment ID, dataset
 version, trial specification version, causal-model version, model, seed,
 split, intervention representation, protocol constraints, overlap gate,
-uncertainty gate, and witness policy. At this stage of the build, only
-`src/infra/config.py`'s `ResolvedConfig` exists — the trial-specification
-version, causal-model version, model identifier, split name, intervention
-representation, protocol-constraints identifier, overlap-gate config, and
-uncertainty-gate config are not yet modeled anywhere in the codebase (they
-belong to modules that later tasks implement: `src/protocols`, `src/models`,
-`src/cohorts`, `src/causal`, `src/uncertainty`). Those fields are recorded as
-`None` for now, with this comment as the pointer for whoever wires them up:
-later stages should populate them by extending `RegistryEntry` and the
-corresponding `_build_entry` construction below, not by inventing a parallel
-registry.
+uncertainty gate, and witness policy.
+
+Variant-sourced fields (task 12.2; `design.md` Section 2.6 tension 6)
+-------------------------------------------------------------------------
+
+`trial_specification_version` now comes from `resolved_config.target_trial.version`
+unconditionally — it was always derivable from the config, independent of
+any model variant, and did not need to wait for `ExperimentVariant` to
+exist.
+
+`model`, `split`, `intervention_representation`, `protocol_constraints`,
+`overlap_gate`, and `uncertainty_gate` were reserved for whichever module
+would eventually describe "the model this run builds" — that module is
+`models.variants.ExperimentVariant` (task 12). `register()` now accepts an
+optional `variant: ExperimentVariant | None` and, when one is supplied,
+populates these six fields from it:
+
+- `model` <- `variant.model_family`
+- `intervention_representation` <- `variant.treatment_representation`
+- `protocol_constraints` <- `variant.protocol_channel`
+- `overlap_gate` <- `str(variant.overlap_gate)`
+- `uncertainty_gate` <- `str(variant.uncertainty_gate)`
+
+`split` is deliberately **not** sourced from `variant` — no field of
+`ExperimentVariant` describes which data split a run evaluates (that is a
+property of *when* a registration happens relative to the pipeline, e.g.
+"this registration is for the development-split training run," not a
+property of the model-building arm). It stays `None` until whichever
+runner calls `register()` is in a position to say which split it is
+registering a run against; passing a `split` string explicitly through
+`register()`'s `split` parameter is how that will be wired up, not through
+`variant`.
+
+Without a `variant` (the pre-task-12 call shape, kept working so existing
+callers do not break), all six remain `None`, exactly as before — this is
+not a breaking change for `scripts/run_causal_analysis.py` or
+`scripts/run_stage.py`, neither of which constructs an `ExperimentVariant`
+today.
 """
 
 from __future__ import annotations
@@ -47,6 +74,12 @@ from pathlib import Path
 from typing import Any
 
 from infra.config import ResolvedConfig
+
+# `models.variants` is torch-free at module scope (torch is deferred inside
+# `build_model`'s body), so importing `ExperimentVariant` here does not pull
+# torch into this module's import graph — this module stays torch-free as
+# required by `tests/unit/test_torch_isolation.py`.
+from models.variants import ExperimentVariant
 
 #: Default location of the append-only registry store, relative to the
 #: repository/results root (`design.md` Section 3.1).
@@ -134,19 +167,33 @@ def _build_entry(
     experiment_id: str,
     git_commit: str | None,
     dirty: bool,
+    split: str | None = None,
+    variant: ExperimentVariant | None = None,
 ) -> RegistryEntry:
+    if variant is None:
+        model = None
+        intervention_representation = None
+        protocol_constraints = None
+        overlap_gate = None
+        uncertainty_gate = None
+    else:
+        model = variant.model_family
+        intervention_representation = variant.treatment_representation
+        protocol_constraints = variant.protocol_channel
+        overlap_gate = str(variant.overlap_gate)
+        uncertainty_gate = str(variant.uncertainty_gate)
+
     return RegistryEntry(
         experiment_id=experiment_id,
         dataset_version=resolved_config.dataset.version,
-        # Not yet modeled — see module docstring.
-        trial_specification_version=None,
-        model=None,
+        trial_specification_version=resolved_config.target_trial.version,
+        model=model,
         seed=resolved_config.experiment.seed,
-        split=None,
-        intervention_representation=None,
-        protocol_constraints=None,
-        overlap_gate=None,
-        uncertainty_gate=None,
+        split=split,
+        intervention_representation=intervention_representation,
+        protocol_constraints=protocol_constraints,
+        overlap_gate=overlap_gate,
+        uncertainty_gate=uncertainty_gate,
         witness_policy=resolved_config.experiment.witness_policy,
         git_commit=git_commit,
         dirty=dirty,
@@ -189,6 +236,8 @@ class ExperimentRegistry:
         git_commit: str | None,
         dirty: bool,
         results_root: str | Path | None = None,
+        split: str | None = None,
+        variant: ExperimentVariant | None = None,
     ) -> str:
         """Register an experiment and append its record to the registry.
 
@@ -201,6 +250,16 @@ class ExperimentRegistry:
                 time (Requirement 1.5).
             results_root: overrides the results root configured on this
                 registry instance for this call only, if provided.
+            split: the data split this registration describes (e.g.
+                `"dev"`, `"val"`), or `None` if the caller is not
+                registering a run against a specific split. Not derived
+                from `variant` — see module docstring.
+            variant: the `models.variants.ExperimentVariant` this run
+                builds, or `None`. When supplied, `model`,
+                `intervention_representation`, `protocol_constraints`,
+                `overlap_gate`, and `uncertainty_gate` are populated from
+                it (Requirement 6.6); when omitted, those fields remain
+                `None` exactly as before task 12.
 
         Returns:
             The computed `experiment_id`.
@@ -221,7 +280,14 @@ class ExperimentRegistry:
                 "results)."
             )
 
-        entry = _build_entry(resolved_config, experiment_id, git_commit, dirty)
+        entry = _build_entry(
+            resolved_config,
+            experiment_id,
+            git_commit,
+            dirty,
+            split=split,
+            variant=variant,
+        )
 
         self.registry_path.parent.mkdir(parents=True, exist_ok=True)
         with self.registry_path.open("a", encoding="utf-8") as handle:

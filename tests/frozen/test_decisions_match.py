@@ -340,6 +340,16 @@ def test_section_17_ablations_count_and_uniqueness():
     assert len(set(names)) == len(names)
 
 
+def test_section_17_expanded_ablation_runs_count():
+    """`design.md` Section 2.6 tension 1 / Requirement 7.1, 7.8: the ten
+    frozen `ABLATIONS` entries expand to exactly twelve runs (task 13;
+    neural-experiment-pipeline spec, consumed here since it is a frozen
+    count this spec introduces on top of the parent's ten)."""
+    from evaluation.ablation_matrix import expand_ablations
+
+    assert len(expand_ablations()) == 12
+
+
 # ---------------------------------------------------------------------------
 # decisions.md Section 18 -- primary evaluation metrics: published
 # reference hazard ratio used in E_logHR.
@@ -511,3 +521,113 @@ def test_section_25_hidden_width_is_one_shared_value():
         .default
     )
     assert sequence_default == intervention_default == 16
+
+
+# ---------------------------------------------------------------------------
+# neural-experiment-pipeline spec consolidation (task 24; Requirement
+# 18.1, 18.2, 18.7). The parent `decisions.md` Section 25 freezes most of
+# these; a few (the readiness ledger's required-seed tuple, the frozen
+# training configuration, the discrete-time survival bin grid, the
+# checklist's 13 keys, SEALED_FORMAT_VERSION) are consumed by/introduced
+# in this child spec and did not yet have a dedicated frozen-value
+# regression assertion before this task.
+# ---------------------------------------------------------------------------
+
+
+def test_section_25_required_seeds():
+    """`decisions.md` Section 25 / `design.md` Section 2.6 tension 7: the
+    five frozen development-stage seeds `(101, 202, 303, 404, 505)`, read
+    by `infra.readiness.ReadinessLedger`/`evaluate_readiness` and by
+    `scripts/run_replication.py`'s cross-seed aggregator."""
+    from infra.readiness import REQUIRED_SEEDS
+
+    assert REQUIRED_SEEDS == (101, 202, 303, 404, 505)
+
+
+def test_section_25_encoder_widths():
+    """`decisions.md` Section 25: encoder channel widths
+    `STATE_INPUT_DIM=4`, `INTERVENTION_INPUT_DIM=3`, `PROTOCOL_INPUT_DIM=2`,
+    unchanged from the pure-Python prototype."""
+    pytest.importorskip("torch")
+
+    from models.torch_intervention_aware import (
+        INTERVENTION_INPUT_DIM,
+        PROTOCOL_INPUT_DIM,
+        STATE_INPUT_DIM,
+    )
+
+    assert STATE_INPUT_DIM == 4
+    assert INTERVENTION_INPUT_DIM == 3
+    assert PROTOCOL_INPUT_DIM == 2
+
+
+def test_section_25_survival_bin_grid():
+    """`decisions.md` Section 25: discrete-time survival bins -- 8-week
+    half-open bins `[0,8), [8,16), ..., [168,176)` plus one final open bin
+    `[176, inf)`, 23 bins total."""
+    pytest.importorskip("torch")
+
+    from models.dataset import BIN_WIDTH_WEEKS, FINAL_BIN_START_WEEKS, SURVIVAL_BIN_COUNT
+
+    assert SURVIVAL_BIN_COUNT == 23
+    assert BIN_WIDTH_WEEKS == 8.0
+    assert FINAL_BIN_START_WEEKS == 176.0
+    assert (SURVIVAL_BIN_COUNT - 1) * BIN_WIDTH_WEEKS == FINAL_BIN_START_WEEKS
+
+
+def test_section_25_adam_optimizer_and_stopping_configuration():
+    """`decisions.md` Section 25: Adam with `betas=(0.9, 0.999)` and
+    `weight_decay=1e-4`; `lr=1e-3`; global-norm gradient clipping at
+    `1.0`; early-stopping patience `20`; `max_epochs=500`. Checked against
+    `TrainingConfig`'s defaults, which `TrainingConfig.is_frozen` compares
+    every real config instance against."""
+    pytest.importorskip("torch")
+
+    from models.torch_training import FROZEN_TRAINING_CONFIG, TrainingConfig
+
+    assert TrainingConfig().is_frozen
+    assert FROZEN_TRAINING_CONFIG.learning_rate == 1e-3
+    assert FROZEN_TRAINING_CONFIG.betas == (0.9, 0.999)
+    assert FROZEN_TRAINING_CONFIG.weight_decay == 1e-4
+    assert FROZEN_TRAINING_CONFIG.grad_clip_norm == 1.0
+    assert FROZEN_TRAINING_CONFIG.patience == 20
+    assert FROZEN_TRAINING_CONFIG.max_epochs == 500
+
+
+def test_section_14_3_lambda_grid_values_not_just_count():
+    """Extends `test_section_14_3_lambda_grid` (count only) with the
+    literal 3x3 grid values themselves: every `(lambda_state,
+    lambda_balance)` pair in `{0.1, 0.3, 1.0} x {0.1, 0.3, 1.0}`, exactly."""
+    from models.losses import load_lambda_grid
+
+    grid = set(load_lambda_grid())
+    expected = {
+        (0.1, 0.1), (0.1, 0.3), (0.1, 1.0),
+        (0.3, 0.1), (0.3, 0.3), (0.3, 1.0),
+        (1.0, 0.1), (1.0, 0.3), (1.0, 1.0),
+    }
+    assert grid == expected
+
+
+def test_go_no_go_checklist_has_exactly_thirteen_keys():
+    """`decisions.md` Section 21 / neural-experiment-pipeline task 20
+    (Requirement 18.4): the go/no-go checklist config carries exactly
+    thirteen keys -- the twelve original human-attested items plus the
+    always-recomputed, never-read-as-attestation
+    `neural_readiness_verified` key (task 20's completion note)."""
+    import yaml
+
+    checklist_path = REPO_ROOT / "configs" / "go_no_go_checklist.yaml"
+    checklist = yaml.safe_load(checklist_path.read_text(encoding="utf-8"))
+
+    assert len(checklist["items"]) == 13
+    assert "neural_readiness_verified" in checklist["items"]
+
+
+def test_sealed_format_version_is_2():
+    """neural-experiment-pipeline Requirement 14.1-14.2: the sealed
+    reference's format version was bumped to 2 to carry the risk-scale
+    quantities (`ReferenceQuantity`/`InternalReference.quantities`)."""
+    from cohorts.sealed_reference import SEALED_FORMAT_VERSION
+
+    assert SEALED_FORMAT_VERSION == 2

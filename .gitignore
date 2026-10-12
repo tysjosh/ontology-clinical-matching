@@ -28,3 +28,23 @@ reference/
 .DS_Store
 # Agent-workflow outputs carry patient-level values; same rule as results/.
 .agents/tasks/*/out/
+
+# Manuscript package (task 23.1; Requirement 20.1-20.6): LaTeX build
+# byproducts and the camera-ready build-only copy are never committed.
+# paper/generated/ is scripts/run_paper.py's write target (every number
+# drawn from saved artifacts, never hand-typed) -- generated fresh by a
+# reproduction run, not tracked.
+paper/*.aux
+paper/*.bbl
+paper/*.blg
+paper/*.log
+paper/*.out
+paper/*.pdf
+paper/.camera_ready_main.*
+paper/tectonic_*.log
+paper/generated/*
+!paper/generated/.gitkeep
+# Figure-compile byproducts land inside paper/generated/ itself (see
+# write_manuscript_figures); already covered by the blanket rule above,
+# listed explicitly for clarity.
+paper/generated/*.log

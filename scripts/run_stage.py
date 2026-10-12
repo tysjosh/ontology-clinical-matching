@@ -50,34 +50,85 @@ has its own dedicated, tested entry point, and re-implementing or
 re-wrapping those would duplicate working code rather than integrate it.
 Instead, the frozen order is documented here, stage by stage, so a reader
 can trace the whole pipeline from this docstring alone even though the
-stages live in different files:
+stages live in different files. Task 24 extends this list with the
+neural-experiment-pipeline stages task 18's list predates, in the order
+that task's own completion criterion names: dataset build -> train GRU ->
+train intervention-aware -> uncertainty and gates -> ablations ->
+sensitivities -> release gate -> replication -> go/no-go -> locked
+evaluation -> reporting.
 
-1. Construct cohort, seal internal randomized reference, split
-   dev/val/test, fit preprocessing, observationalize each split, run the
-   leakage audit, and fit the non-neural predictive baseline: this
-   script's `--stage full_pipeline`, which calls
+1. Dataset build: construct cohort, seal internal randomized reference,
+   split dev/val/test, fit preprocessing, observationalize each split,
+   run the leakage audit, and fit the non-neural predictive baseline --
+   this script's `--stage full_pipeline`, which calls
    `cohorts.pipeline.run_observationalization_pipeline()` (itself the
    single place that chains cohort construction through
    observationalization, `decisions.md` Section 9 steps 1-8),
    `data.leakage_audit.LeakageAuditor().audit()`, and
-   `models.non_neural_baseline.CoxBaseline().fit()`.
-2. Ablation matrix (all ten frozen ablations): `scripts/run_ablations.py`.
-3. Robustness diagnostics: `src/evaluation/robustness.py`'s robustness
-   functions (positivity/overlap checks, sensitivity analyses).
-4. Go/no-go checklist: `scripts/check_go_no_go.py`.
-5. Locked external evaluation (unsealing the internal randomized
-   reference) — only reachable with a valid, minted
-   `cohorts.sealed_reference.LockedEvaluationToken`:
-   `scripts/run_paper.py --stage locked-evaluation` (always refused
-   without a real token; see that script's module docstring).
-6. Reporting (tables, figures, model card) regenerated from saved
-   predictions/aggregates: `scripts/run_paper.py --stage reproduction`
-   (the default stage).
+   `models.non_neural_baseline.CoxBaseline().fit()`. The same
+   `run_observationalization_pipeline()` call is also the first step
+   inside `scripts/run_replication.py::run_seed()` and
+   `scripts/run_ablations.py::run_retrained_ablations()`, so every stage
+   below builds its dataset identically.
+2. Train Sequence_GRU: `models.variants.build_model` (dispatched to
+   `model_family="sequence_gru"`) + `models.torch_training.train_ensemble`
+   under the frozen `TrainingConfig`
+   (`models.torch_training.FROZEN_TRAINING_CONFIG`) and the frozen 3x3
+   lambda grid -- run once per frozen seed inside
+   `scripts/run_replication.py::run_seed()`, and again, once per
+   retrain-mode ablation arm, by `scripts/run_ablations.py`.
+3. Train the Intervention_Aware_Model: the same `build_model`/
+   `train_ensemble` pair, dispatched to `model_family="intervention_aware"`
+   -- composed immediately after step 2 inside the same two call sites.
+4. Uncertainty and gates: ensemble variance
+   (`uncertainty.ensemble.DeepEnsemble`), the per-patient support gate
+   (`uncertainty.support_gate.PatientSupportGate`), and the selective-
+   prediction report (`evaluation.uncertainty_report.evaluate_uncertainty`).
+5. Ablation matrix (all ten frozen entries, twelve expanded runs):
+   `scripts/run_ablations.py` (the six retrain-mode runs) plus
+   `evaluation.ablation_reuse` (the six reuse-mode runs).
+6. Sensitivity variants (all eight frozen entries):
+   `evaluation.robustness.SensitivityRobustness.run_executed()`, called
+   by `scripts/run_causal_analysis.py` and again inside
+   `scripts/run_replication.py::run_seed()`.
+7. Release gate: `evaluation.release_gate.evaluate_release()`, the
+   six-way cohort-release conjunction over the overlap report, the three
+   witnesses, and the uncertainty-gate boolean -- the last step inside
+   `run_seed()` and inside `scripts/run_causal_analysis.py`.
+8. Cross-seed replication: `scripts/run_replication.py`'s `run_seed()`
+   (steps 1, 6, 7 above plus both training steps, composed together
+   inside that one function per seed -- see that module for its own
+   internal ordering) once per frozen seed, followed by `aggregate()`
+   (the cross-seed stability determination, `decisions.md` Section 26's
+   amendment) and `record_seed_determinism()`/`write_replication_summary()`.
+9. Go/no-go checklist: `scripts/check_go_no_go.py`, which recomputes
+   neural readiness from the readiness ledger
+   (`infra.readiness.evaluate_readiness`) that steps 2-8 above populate
+   via `infra.readiness.append_ledger_entry`, alongside the twelve
+   human-attested checklist items.
+10. Locked external evaluation (unsealing the internal randomized
+    reference) — only reachable with a valid, minted
+    `cohorts.sealed_reference.LockedEvaluationToken` minted by step 9:
+    `scripts/run_paper.py --stage locked-evaluation`, which delegates to
+    `scripts/run_locked_evaluation.py`'s own CLI (task 22) and propagates
+    its exit status unchanged.
+11. Reporting (tables, figures, model card, the five headline
+    comparisons, honest blocked/negative/contradicting-result reporting)
+    regenerated from saved predictions/aggregates:
+    `scripts/run_paper.py --stage reproduction` (the default stage) and
+    `scripts/run_real_data_reporting.py`.
 
-So the full pipeline is: this script's `full_pipeline` stage, then
-`run_ablations.py`, then `evaluation.robustness`, then
-`check_go_no_go.py`, then (only with a token) the locked-evaluation stage,
-then `run_paper.py` for reporting.
+So the full pipeline is: this script's `full_pipeline` stage (dataset
+build), then `scripts/run_replication.py::run_seed()` per frozen seed
+(which itself composes dataset build, both training steps, sensitivities,
+and the release gate) followed by `aggregate()` (replication), then
+`run_ablations.py` plus `evaluation.ablation_reuse` (the twelve ablation
+runs, run once rather than once per replication seed), then
+`check_go_no_go.py`, then (only with a minted token) `run_paper.py
+--stage locked-evaluation`, then `run_paper.py --stage reproduction` /
+`run_real_data_reporting.py` for reporting. `tests/neural/test_smoke_cpu.py`
+(task 24) exercises every one of these eleven items end to end on a
+~40-patient synthetic cohort, at a test-only reduced scale.
 
 Usage:
 
