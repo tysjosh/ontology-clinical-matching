@@ -184,10 +184,13 @@ from models.dataset import DatasetDimensions, PatientDatasetBuilder, TensorBatch
 # `tests/unit/test_torch_isolation.py`'s `TORCH_FREE_MODULES`.
 from models.torch_training import (  # noqa: E402
     FROZEN_TRAINING_CONFIG,
+    SUPPORTED_DEVICES,
     TrainingBatches,
     TrainingConfig,
+    batch_to_device,
     checkpoint_sha256,
     factual_outputs,
+    resolve_device,
     select_lambdas,
     train_one_model,
 )
@@ -442,15 +445,22 @@ class ValidationMetricResult:
     predicted_risks: tuple[float, ...]
 
 
-def compute_validation_metric(model: Any, val_batch: TensorBatch) -> ValidationMetricResult:
+def compute_validation_metric(
+    model: Any, val_batch: TensorBatch, device: str = "cpu"
+) -> ValidationMetricResult:
     """Compute the frozen primary factual metric (time-dependent
     concordance) for `model` on `val_batch`'s retained population.
 
     Args:
         model: a trained `TorchSequenceGRU` or `TorchInterventionAwareModel`
-            (in `eval()` mode, as `train_one_model` already leaves it).
+            (in `eval()` mode, as `train_one_model` already leaves it),
+            already resident on `device`.
         val_batch: the retained Validation_Split `TensorBatch` (never a
-            Development_Split or test batch -- Requirement 7.11).
+            Development_Split or test batch -- Requirement 7.11). Moved
+            onto `device` here so its tensors match `model`'s.
+        device: the device `model` lives on (`"cpu"` or `"cuda"`,
+            Requirement 7.10's training device, not re-validated here --
+            callers already resolved it once via `resolve_device`).
 
     Returns:
         A `ValidationMetricResult`.
@@ -459,6 +469,7 @@ def compute_validation_metric(model: Any, val_batch: TensorBatch) -> ValidationM
 
     from models.torch_intervention_aware import outcome_from_hazards
 
+    val_batch = batch_to_device(val_batch, device)
     with torch.no_grad():
         outputs = factual_outputs(model, val_batch)
         risk = outcome_from_hazards(outputs.hazards)
@@ -538,6 +549,7 @@ def _select_run_lambdas(
     val_batch: TensorBatch,
     selection_seed: int,
     training_config: Any,
+    device: str = "cpu",
 ) -> tuple[float, float]:
     """`(lambda_state, lambda_balance)` for `variant`, selected once.
 
@@ -549,10 +561,16 @@ def _select_run_lambdas(
     that one arm's objective by zeroing its weight, not by running a
     different, smaller grid search restricted to `lambda_balance=0.0` --
     the grid itself stays the one frozen 3x3 grid for every arm.
+
+    `device` is forwarded to `select_lambdas` unchanged (`"cpu"` or
+    `"cuda"`); the grid-search models it trains internally run on that
+    device, matching every retrain attempt for this run.
     """
     batches = TrainingBatches(dev=dev_batch, val=val_batch)
     model_factory = lambda: build_model(variant, dimensions, selection_seed)  # noqa: E731
-    selection = select_lambdas(model_factory, batches, selection_seed, config=training_config)
+    selection = select_lambdas(
+        model_factory, batches, selection_seed, device, config=training_config
+    )
     lambda_state, lambda_balance = selection.selected
     if not variant.balance_penalty_enabled:
         lambda_balance = 0.0
@@ -569,10 +587,11 @@ def train_retrained_arm_at_seed(
     lambda_balance: float,
     checkpoint_dir: Path,
     training_config: Any,
+    device: str = "cpu",
 ) -> RetrainedArmSeedResult:
     """Train `run`'s model from initialization at `seed`, under
     `training_config` (the frozen training configuration by default,
-    Requirement 7.10).
+    Requirement 7.10), on `device` (`"cpu"` or `"cuda"`).
 
     Never raises: any exception during construction or training is caught
     and returned as a failed `RetrainedArmSeedResult` (Requirement 7.16).
@@ -586,6 +605,7 @@ def train_retrained_arm_at_seed(
             lambda_state=lambda_state,
             lambda_balance=lambda_balance,
             seed=seed,
+            device=device,
             config=training_config,
             checkpoint_path=checkpoint_path,
         )
@@ -594,7 +614,7 @@ def train_retrained_arm_at_seed(
         if run.variant.treatment_representation == "placebo_channel":
             placebo_vector = tuple(float(v) for v in result.model.placebo_vector.tolist())
 
-        validation_metric = compute_validation_metric(result.model, val_batch)
+        validation_metric = compute_validation_metric(result.model, val_batch, device=device)
 
         return RetrainedArmSeedResult(
             run_id=run.run_id,
@@ -646,6 +666,7 @@ def run_retrained_ablations(
     seeds: Sequence[int] = REQUIRED_SEEDS,
     training_config: TrainingConfig = FROZEN_TRAINING_CONFIG,
     raise_on_collision: bool = True,
+    device: str = "cpu",
 ) -> dict[str, dict[str, Any]]:
     """Run the six retrain-mode ablation arms through `build_model` and the
     frozen training harness, at every seed in `seeds`.
@@ -689,6 +710,12 @@ def run_retrained_ablations(
             small test cohort, where real (not synthetic) model outputs
             can genuinely coincide by small-sample chance; production
             callers must always leave this at the default.
+        device: the device every lambda-selection and retrain-mode
+            training attempt in this harness run uses (`"cpu"` or
+            `"cuda"`, `decisions.md` Section 25). Resolved once, up
+            front, via `models.torch_training.resolve_device` -- an
+            unsupported or unavailable device fails before the pipeline
+            or any batch is built, not partway through training.
 
     Returns:
         `{run_id: {"seeds": {seed: RetrainedArmSeedResult.to_dict()}}}`,
@@ -697,9 +724,12 @@ def run_retrained_ablations(
     Raises:
         VariantCollisionError: if `raise_on_collision` is `True` and a
             collision is detected.
+        UnsupportedDeviceError / DeviceUnavailableError: from
+            `resolve_device`, before anything else runs.
     """
     if not seeds:
         raise ValueError("seeds must be non-empty")
+    device = resolve_device(device)
 
     experiment_id = _compute_harness_experiment_id(master_seed)
     ablations_root = Path(results_root) / experiment_id / "ablations"
@@ -740,6 +770,7 @@ def run_retrained_ablations(
             val_batch,
             selection_seed=seeds[0],
             training_config=training_config,
+            device=device,
         )
 
         checkpoint_dir = ablations_root / run.run_id / "checkpoints"
@@ -757,6 +788,7 @@ def run_retrained_ablations(
                 lambda_balance,
                 checkpoint_dir,
                 training_config=training_config,
+                device=device,
             )
             if not seed_result.succeeded:
                 table_incomplete = True
@@ -976,6 +1008,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=list(REQUIRED_SEEDS),
         help=f"Seeds each retrain-mode arm is trained at (default: {list(REQUIRED_SEEDS)}).",
     )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default="cpu",
+        choices=sorted(SUPPORTED_DEVICES),
+        help=(
+            "Device every lambda-selection and retrain-mode training attempt "
+            "runs on (decisions.md Section 25: 'cpu' default, 'cuda' when "
+            "available). Fails fast, before any data is loaded, if 'cuda' is "
+            "requested but torch.cuda.is_available() is False (default: cpu)."
+        ),
+    )
     return parser
 
 
@@ -1002,6 +1046,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
+        device = resolve_device(args.device)
+
         with args.target_trial_config.open("r", encoding="utf-8") as handle:
             raw_spec = yaml.safe_load(handle)
         spec = TargetTrialSpec.model_validate(raw_spec)
@@ -1021,6 +1067,7 @@ def main(argv: list[str] | None = None) -> int:
             args.results_root,
             precomputed_endpoint_results=endpoint_results,
             seeds=tuple(args.seeds),
+            device=device,
         )
     except Actg175DataNotFoundError as exc:
         print(
