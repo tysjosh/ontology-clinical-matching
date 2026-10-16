@@ -397,6 +397,9 @@ class SensitivityRobustness:
         propensity_scores: Mapping[str, float],
         master_seed: int,
         adjustment_set: Sequence[str],
+        stronger_selection_cohort: StrongerSelectionCohort | None = None,
+        support_population: SupportPopulation | None = None,
+        propensity_n_folds: int = 5,
     ) -> SensitivityStabilityResult:
         """Execute all eight frozen sensitivity variants (task 15/15.1;
         Requirement 8.1, 8.2, 8.3, 8.5, 8.6, 8.7, 8.8, 8.9, 8.10).
@@ -412,8 +415,8 @@ class SensitivityRobustness:
                 (via `apply_variant`).
             patients: the retained Development_Split population the
                 primary analysis itself runs on. Shared by every variant
-                except `increased_missingness_stress` and `week_20_removed`,
-                which perturb a copy of this population.
+                except `stronger_selection_severity`, which uses
+                `stronger_selection_cohort`.
             propensity_scores: `{patient_id: propensity}` from the
                 primary (logistic) propensity fit, reused by every
                 variant except `boosted_propensity_model` (which fits its
@@ -421,9 +424,26 @@ class SensitivityRobustness:
                 refit against reversed arms).
             master_seed: the run's top-level seed; variant-specific seeds
                 are derived from it via `infra.seeding.derive_seed`.
-            adjustment_set: the frozen baseline adjustment set, forwarded
-                to `OverlapDiagnostics.compute` for the
-                `alternative_support_thresholds` variant.
+            adjustment_set: the frozen baseline adjustment set.
+            stronger_selection_cohort: the development-retained cohort
+                re-observationalized under the Section 26 stronger
+                mechanism, with its own cross-fitted propensities (see
+                `build_stronger_selection_cohort`). `patients` was
+                retained under the primary mechanism, so it cannot stand
+                in; without this argument `stronger_selection_severity`
+                is recorded unexecuted.
+            support_population: the same development population before
+                common-support trimming, with its primary propensities.
+                The support-threshold and missingness variants start from
+                it. `None` means `patients` was not trimmed (they are
+                then used as is).
+            propensity_n_folds: cross-fitting folds for the missingness
+                variant's propensity refit; production callers pass the
+                frozen 5.
+
+        Stability is judged against the primary IPCW-AIPW estimate's
+        direction on `patients`/`propensity_scores` (the estimate the
+        primary analysis reports), per `STABILITY_CRITERION_DESCRIPTION`.
 
         Returns:
             A `SensitivityStabilityResult` with exactly 8 `variant_outcomes`
@@ -438,7 +458,15 @@ class SensitivityRobustness:
         for variant in SENSITIVITY_VARIANTS:
             try:
                 outcome = _execute_variant(
-                    variant, base_config, patients, propensity_scores, master_seed, adjustment_set
+                    variant,
+                    base_config,
+                    patients,
+                    propensity_scores,
+                    master_seed,
+                    adjustment_set,
+                    stronger_selection_cohort,
+                    support_population,
+                    propensity_n_folds,
                 )
             except Exception as exc:  # noqa: BLE001 -- Requirement 8.10
                 outcome = SensitivityVariantOutcome(
@@ -456,7 +484,13 @@ class SensitivityRobustness:
             outcomes.append(outcome)
 
         unexecuted_variants = tuple(o.name for o in outcomes if o.status == "unexecuted")
-        overall_stability = _determine_overall_stability(outcomes)
+        try:
+            primary_direction = _direction_from_estimate(
+                _aipw_risk_difference(patients, propensity_scores)
+            )
+        except Exception:  # noqa: BLE001 -- no primary estimate means no direction
+            primary_direction = "undetermined"
+        overall_stability = _determine_overall_stability(outcomes, primary_direction)
 
         return SensitivityStabilityResult(
             variant_outcomes=tuple(outcomes),
@@ -507,6 +541,13 @@ class SensitivityVariantOutcome:
         resolved_config_hash: `infra.registry.canonical_json`'s hash of
             this variant's materialized `ResolvedConfig` (from
             `apply_variant`), or `None` if unexecuted.
+        component_estimates: `(label, estimate)` pairs for a variant that
+            Section 11/12 defines with more than one setting -- the two
+            sensitivity clipping presets, or the two common-support bands.
+            `estimate` is the first component; every component's
+            direction counts toward stability, so a contradiction in any
+            one of them is never hidden behind the reported headline
+            value. Empty for single-setting variants.
     """
 
     name: str
@@ -519,6 +560,14 @@ class SensitivityVariantOutcome:
     direction: str
     failure_reason: str | None
     resolved_config_hash: str | None
+    component_estimates: tuple[tuple[str, float], ...] = ()
+
+    def directions(self) -> tuple[str, ...]:
+        """Every effect direction this outcome contributes to stability:
+        its own, plus one per component estimate."""
+        return (self.direction,) + tuple(
+            _direction_from_estimate(value) for _, value in self.component_estimates
+        )
 
     def to_dict(self) -> dict[str, object]:
         """JSON-serializable form, for `sensitivity_stability.json`
@@ -534,6 +583,7 @@ class SensitivityVariantOutcome:
             "direction": self.direction,
             "failure_reason": self.failure_reason,
             "resolved_config_hash": self.resolved_config_hash,
+            "component_estimates": {label: value for label, value in self.component_estimates},
         }
 
 
@@ -642,35 +692,52 @@ STABILITY_CRITERION_DESCRIPTION: str = (
 )
 
 
-def _determine_overall_stability(outcomes: Sequence[SensitivityVariantOutcome]) -> str:
+def _determine_overall_stability(
+    outcomes: Sequence[SensitivityVariantOutcome], primary_direction: str | None = None
+) -> str:
     """`"stable"` / `"unstable"` / `"undetermined"` per
     `STABILITY_CRITERION_DESCRIPTION` (Requirement 8.9).
 
-    The "primary direction" being compared against is the majority
-    direction among the executed variants themselves (the sign most
-    executed variants agree on) -- this module has no separate
-    complete-model estimate passed in, so "contradicts the aggregate
-    direction" is operationalized here as "disagrees with the executed
-    majority." A caller with the real complete-model primary estimate on
-    hand (e.g. `scripts/run_causal_analysis.py`) may re-derive stability
-    from `variant_outcomes` directly against that real primary direction
-    instead; this function's `overall_stability` is this module's own
-    best self-contained determination.
+    Any unexecuted variant forces `"undetermined"`.
+
+    `primary_direction` is the primary complete-model estimate's
+    direction -- what the criterion text compares against.
+    `run_executed` always supplies it, from the primary IPCW-AIPW estimate
+    on the same patients and propensities. A variant contradicts when any
+    of its directions (`SensitivityVariantOutcome.directions`, which
+    includes every component estimate) is the opposite non-null direction
+    of the primary one. A `"null"` primary direction has no opposite, so
+    nothing can contradict it.
+
+    When `primary_direction` is `None` (a direct caller with no primary
+    estimate), the majority direction among the executed variants stands
+    in for it.
     """
     if any(outcome.status == "unexecuted" for outcome in outcomes):
         return "undetermined"
 
-    directions = [outcome.direction for outcome in outcomes if outcome.direction != "undetermined"]
+    directions = [
+        direction
+        for outcome in outcomes
+        for direction in outcome.directions()
+        if direction != "undetermined"
+    ]
     if not directions:
         return "undetermined"
 
-    direction_counts: dict[str, int] = {}
-    for direction in directions:
-        direction_counts[direction] = direction_counts.get(direction, 0) + 1
-    majority_direction = max(direction_counts, key=lambda d: direction_counts[d])
+    if primary_direction is None or primary_direction == "undetermined":
+        direction_counts: dict[str, int] = {}
+        for direction in directions:
+            direction_counts[direction] = direction_counts.get(direction, 0) + 1
+        reference_direction = max(direction_counts, key=lambda d: direction_counts[d])
+    else:
+        reference_direction = primary_direction
+
+    if primary_direction == "null":
+        return "stable"
 
     contradicts = any(
-        direction != majority_direction and direction != "null" for direction in directions
+        direction != reference_direction and direction != "null" for direction in directions
     )
     return "unstable" if contradicts else "stable"
 
@@ -758,11 +825,167 @@ def _variant_overrides_diff(variant: SensitivityVariantConfig) -> dict[str, Any]
         ) from None
 
 
-#: `decisions.md` Section 12's sensitivity common-support band, named here
-#: so `_execute_variant`'s `alternative_support_thresholds` branch does
-#: not need a second import path -- see `causal.overlap.SENSITIVITY_SUPPORT_LOWER`/
-#: `SENSITIVITY_SUPPORT_UPPER` for the frozen values themselves.
-_STRICT_SUPPORT_THRESHOLDS: tuple[float, float] = (0.20, 0.80)
+@dataclass(frozen=True)
+class StrongerSelectionCohort:
+    """The development-retained cohort under the Section 26 stronger
+    selection mechanism, for the `stronger_selection_severity` variant.
+
+    Attributes:
+        patients: the development split's retained patients when the
+            identical pipeline (same cohort, split, preprocessing, and
+            seeds) is observationalized with `selection_severity="stronger"`,
+            after the same common-support trim the primary analysis uses.
+        propensity_scores: cross-fitted primary (logistic) propensities
+            refit on exactly these patients.
+    """
+
+    patients: tuple[PatientRecord, ...]
+    propensity_scores: Mapping[str, float]
+
+
+def build_stronger_selection_cohort(
+    raw_timelines: Any,
+    treatment_arms: Mapping[str, int],
+    spec: Any,
+    pipeline_seed: int,
+    propensity_seed: int,
+    n_folds: int,
+    precomputed_endpoint_results: Any = None,
+) -> StrongerSelectionCohort:
+    """Re-run the observationalization pipeline under the stronger
+    mechanism and refit the primary propensity model on the result.
+
+    `pipeline_seed` and `propensity_seed` must be the primary analysis's
+    own seeds, so the stronger cohort shares its split and differs only
+    in which patients selection retains (the Section 26 amendment: "the
+    same per-split HMAC-derived seeds"). The sealed reference is not
+    needed here, so the pipeline's default placeholder estimator is used.
+    """
+    from causal.overlap import trim_to_common_support
+    from causal.propensity import LogisticPropensityModel
+    from cohorts.pipeline import run_observationalization_pipeline
+
+    result = run_observationalization_pipeline(
+        raw_timelines,
+        treatment_arms,
+        spec,
+        pipeline_seed,
+        precomputed_endpoint_results=precomputed_endpoint_results,
+        selection_severity="stronger",
+    )
+    retained_ids = set(result.dev.retained_patient_ids)
+    dev_patients = tuple(p for p in result.split_cohorts.dev if p.patient_id in retained_ids)
+    cross_fitted = LogisticPropensityModel(seed=propensity_seed).fit_cross_fitted(
+        dev_patients, n_folds=n_folds
+    )
+    # The same common-support trim the primary analysis applies (Section 26
+    # amendment of 2026-10-12, item B).
+    trimmed = trim_to_common_support(dev_patients, cross_fitted.propensity_scores)
+    return StrongerSelectionCohort(
+        patients=trimmed.retained, propensity_scores=cross_fitted.propensity_scores
+    )
+
+
+@dataclass(frozen=True)
+class SupportPopulation:
+    """The development-retained population *before* common-support
+    trimming, with the primary propensities that defined the trim.
+
+    `run_executed`'s `patients` is the trimmed estimation population. Two
+    variants need to start from before the trim: the support-threshold
+    variant (it re-trims at a different band) and the missingness stress
+    test (it perturbs covariates, refits the propensity model, and re-trims
+    under the same rule).
+    """
+
+    patients: tuple[PatientRecord, ...]
+    propensity_scores: Mapping[str, float]
+
+
+#: The frozen increased-laboratory-missingness stress test (`decisions.md`
+#: Section 26 amendment of 2026-10-12, item C): after the split, each
+#: development-retained patient's observed baseline CD4 and baseline CD8
+#: are deleted independently with this probability, missing completely at
+#: random. 0.40 is anchored to the trial itself: week-96 CD4 is missing for
+#: 38% of the development cohort (139 of 362, seed-101 replication split),
+#: rounded to the nearest tenth.
+INCREASED_MISSINGNESS_RATE: float = 0.40
+
+#: The baseline laboratory fields the stress test deletes, as stored
+#: `static_covariates` keys (the Section 13 `baseline_cd4`/`baseline_cd8`
+#: covariates; `causal.adjustment_set` maps them to these same keys).
+INCREASED_MISSINGNESS_FIELDS: tuple[str, ...] = ("baseline_cd4", "baseline_cd8")
+
+
+def apply_lab_missingness(
+    patients: Sequence[PatientRecord], rate: float, seed: int
+) -> list[PatientRecord]:
+    """Delete each observed `INCREASED_MISSINGNESS_FIELDS` value with
+    probability `rate`, completely at random.
+
+    One `random.Random(seed)` stream, one uniform draw per (patient, field),
+    patients in `patient_id` order and fields in tuple order -- drawn even
+    when the value is already missing, so the stream does not depend on
+    the data. A deleted value becomes `None`, which every downstream
+    encoding treats as missing under its existing rule (`causal.propensity`
+    module docstring). Returns new records in input order; the input
+    records are not modified.
+    """
+    import dataclasses
+    import random
+
+    rng = random.Random(seed)
+    replaced: dict[str, PatientRecord] = {}
+    for patient in sorted(patients, key=lambda p: p.patient_id):
+        static = dict(patient.timeline.static_covariates)
+        for field_name in INCREASED_MISSINGNESS_FIELDS:
+            draw = rng.random()
+            if static.get(field_name) is not None and draw < rate:
+                static[field_name] = None
+        timeline = dataclasses.replace(patient.timeline, static_covariates=static)
+        replaced[patient.patient_id] = dataclasses.replace(patient, timeline=timeline)
+    return [replaced[p.patient_id] for p in patients]
+
+
+#: `decisions.md` Section 11's two sensitivity clipping presets, in the
+#: order reported (`causal.weighting.CLIP_PRESETS` names). The first is the
+#: variant's headline `estimate`.
+_SENSITIVITY_CLIP_PRESETS: tuple[str, ...] = ("sensitivity_narrow", "sensitivity_wide")
+
+
+def _support_band_estimates(
+    patients: Sequence[PatientRecord], propensity_scores: Mapping[str, float]
+) -> tuple[tuple[str, float], ...]:
+    """IPCW-AIPW re-estimated on the patients inside each frozen
+    `decisions.md` Section 12 common-support band: the sensitivity band
+    `[0.05, 0.95]` first (the headline), then the primary band
+    `[0.10, 0.90]`. Bands come from `causal.overlap`'s constants.
+
+    `patients` should be the population *before* trimming, so the two
+    bands are two alternative trims of the same cohort; the primary-band
+    component then equals the primary (trimmed) estimate."""
+    from causal.overlap import (
+        PRIMARY_SUPPORT_LOWER,
+        PRIMARY_SUPPORT_UPPER,
+        SENSITIVITY_SUPPORT_LOWER,
+        SENSITIVITY_SUPPORT_UPPER,
+    )
+
+    bands = (
+        ("sensitivity_0.05_0.95", SENSITIVITY_SUPPORT_LOWER, SENSITIVITY_SUPPORT_UPPER),
+        ("primary_0.10_0.90", PRIMARY_SUPPORT_LOWER, PRIMARY_SUPPORT_UPPER),
+    )
+    estimates: list[tuple[str, float]] = []
+    for label, lower, upper in bands:
+        inside = [p for p in patients if lower <= propensity_scores[p.patient_id] <= upper]
+        estimates.append((label, _aipw_risk_difference(inside, propensity_scores)))
+    return tuple(estimates)
+
+
+class SensitivityVariantNotExecutable(Exception):
+    """A variant that cannot be run honestly with what this call was given
+    (a missing frozen value or a missing input). Recorded `unexecuted` by
+    `run_executed`, which forces `overall_stability="undetermined"`."""
 
 
 def _execute_variant(
@@ -772,12 +995,16 @@ def _execute_variant(
     propensity_scores: Mapping[str, float],
     master_seed: int,
     adjustment_set: Sequence[str],
+    stronger_selection_cohort: StrongerSelectionCohort | None = None,
+    support_population: SupportPopulation | None = None,
+    propensity_n_folds: int = 5,
 ) -> SensitivityVariantOutcome:
     """Dispatch one variant to the pipeline stage it actually affects.
 
-    See `design.md` Section 3.7's table for the frozen mapping this
-    function implements verbatim; each branch is documented individually
-    below.
+    Every executed variant's `estimate` is the primary IPCW-AIPW 96-week
+    risk difference recomputed under that variant's change, so every
+    direction compared for stability is a treatment-effect direction.
+    Each branch is documented individually below.
     """
     from infra.registry import canonical_json
     from infra.seeding import derive_seed
@@ -785,7 +1012,9 @@ def _execute_variant(
     resolved_config = apply_variant(base_config, _variant_overrides_diff(variant))
     resolved_config_hash = canonical_json(resolved_config)
 
-    def _executed(estimate: float) -> SensitivityVariantOutcome:
+    def _executed(
+        estimate: float, components: tuple[tuple[str, float], ...] = ()
+    ) -> SensitivityVariantOutcome:
         return SensitivityVariantOutcome(
             name=variant.name,
             status="executed",
@@ -797,16 +1026,14 @@ def _execute_variant(
             direction=_direction_from_estimate(estimate),
             failure_reason=None,
             resolved_config_hash=resolved_config_hash,
+            component_estimates=components,
         )
 
     if variant.name == "boosted_propensity_model":
-        # Requirement 8.3: executes the boosted propensity model;
-        # `BoostedPropensityModel.fit_cross_fitted` deliberately raises
-        # `MissingDependencyError` (no xgboost dependency) rather than
-        # silently substituting another algorithm -- that exception
-        # propagates up to `run_executed`'s try/except, which records
-        # this variant `unexecuted` with the real failure reason
-        # (Requirement 8.10) rather than this function swallowing it.
+        # Requirement 8.3: refits the propensity with the frozen Section 11
+        # gradient-boosting model and re-estimates. Without xgboost,
+        # `fit_cross_fitted` raises `MissingDependencyError`, which
+        # `run_executed` records as unexecuted (Requirement 8.10).
         from causal.propensity import BoostedPropensityModel
 
         seed = derive_seed(master_seed, variant.name)
@@ -816,50 +1043,46 @@ def _execute_variant(
         return _executed(estimate)
 
     if variant.name == "alternative_weight_clipping":
-        # Requirement 8.1: alternative weight clipping through
-        # causal.weighting.clip_weights -- re-estimates the primary
-        # IPCW-AIPW estimate is unaffected by the clipping preset itself
-        # (AIPW does not clip weights in this codebase's implementation),
-        # so this variant's diagnostic is the clipped stabilized-IPTW
-        # weight distribution's extreme-weight count under the narrow
-        # preset, a sensitivity check on positivity rather than a second
-        # point estimate.
-        from causal.baselines import _stabilized_iptw_weights
-        from causal.weighting import clip_weights
+        # Requirement 8.1 / Section 11's sensitivity clipping: IPCW-AIPW
+        # with every inverse-propensity weight clamped to each sensitivity
+        # preset's percentile bounds. Only the weights change; the outcome
+        # model and censoring weights are the primary ones.
+        components = tuple(
+            (preset, _aipw_risk_difference(patients, propensity_scores, clip_preset=preset))
+            for preset in _SENSITIVITY_CLIP_PRESETS
+        )
+        return _executed(components[0][1], components)
 
-        raw_weights = _stabilized_iptw_weights(patients, propensity_scores)
-        clipped = clip_weights(raw_weights, preset="sensitivity_narrow")
-        estimate = sum(clipped.values()) / len(clipped) if clipped else float("nan")
-        return _executed(estimate)
+    untrimmed = support_population or SupportPopulation(
+        patients=tuple(patients), propensity_scores=propensity_scores
+    )
 
     if variant.name == "alternative_support_thresholds":
-        # Requirement 8.1: re-runs OverlapDiagnostics.compute; the
-        # "estimate" reported for this diagnostic variant is the
-        # resulting support_valid-equivalent summary: the fraction of
-        # patients retained under the sensitivity (wider,
-        # SENSITIVITY_SUPPORT_LOWER/UPPER) band, which is already what
-        # OverlapReport.common_support.sensitivity_fraction reports.
-        from causal.overlap import OverlapDiagnostics
-
-        report = OverlapDiagnostics.compute(patients, propensity_scores, adjustment_set)
-        estimate = report.common_support.sensitivity_fraction
-        return _executed(estimate)
+        # Requirement 8.1 / Section 12: the cohort trimmed at each frozen
+        # common-support band instead, then IPCW-AIPW.
+        components = _support_band_estimates(untrimmed.patients, untrimmed.propensity_scores)
+        return _executed(components[0][1], components)
 
     if variant.name == "increased_missingness_stress":
-        # Requirement 8.5: additional missingness applied AFTER splitting
-        # (patients are already the retained, post-split population),
-        # seeded derive_seed(master_seed, variant_name). This module does
-        # not re-run the full outcome pipeline on a missingness-perturbed
-        # copy (that requires `data`-layer event mutation this module has
-        # no access point for); the executed diagnostic reported here is
-        # the AIPW estimate recomputed on the unperturbed `patients` under
-        # the variant's dedicated seed, which at minimum confirms the
-        # variant executes under its own frozen seed derivation -- a
-        # documented simplification, not a full missingness-injection
-        # pipeline.
-        seed = derive_seed(master_seed, variant.name)
-        del seed  # derived for provenance; this diagnostic does not consume randomness itself
-        estimate = _aipw_risk_difference(patients, propensity_scores)
+        # Requirement 8.5 / Section 26 amendment of 2026-10-12, item C: after
+        # the split, baseline CD4 and CD8 deleted completely at random at
+        # `INCREASED_MISSINGNESS_RATE`, seeded by
+        # derive_seed(master_seed, variant_name). The perturbed cohort then
+        # goes through the primary path again: refit the primary propensity
+        # model, apply the same common-support trim, and re-estimate.
+        from causal.overlap import trim_to_common_support
+        from causal.propensity import LogisticPropensityModel
+
+        perturbed = apply_lab_missingness(
+            untrimmed.patients,
+            INCREASED_MISSINGNESS_RATE,
+            seed=derive_seed(master_seed, variant.name),
+        )
+        refit = LogisticPropensityModel(
+            seed=derive_seed(master_seed, "propensity")
+        ).fit_cross_fitted(perturbed, n_folds=propensity_n_folds)
+        trimmed = trim_to_common_support(perturbed, refit.propensity_scores)
+        estimate = _aipw_risk_difference(list(trimmed.retained), refit.propensity_scores)
         return _executed(estimate)
 
     if variant.name == "week_20_removed":
@@ -876,18 +1099,20 @@ def _execute_variant(
         return _executed(estimate)
 
     if variant.name == "treatment_comparator_reversal":
-        # Requirement 8.4: reverses the effect interpretation so the
-        # reported direction refers to the original treatment contrast.
-        # Computed by swapping arm 0/1 risk from the already-computed
-        # AIPW estimate's components is not available at this layer
-        # (ipcw_aipw returns a single CausalEstimate), so this re-fits
-        # ipcw_aipw on the SAME patients with the propensity model's
-        # P(A=1|X) replaced by P(A=0|X) = 1 - P(A=1|X) -- the standard
-        # arm-reversal propensity transform -- then negates the resulting
-        # risk-difference estimate to re-express it on the original
-        # contrast's scale (Req 8.4's "reverse the effect interpretation").
+        # Requirement 8.4: swap which arm is "treatment". Both the arm
+        # labels and the propensities are reversed (A' = 1 - A,
+        # e' = 1 - e), IPCW-AIPW is re-estimated -- refitting the outcome
+        # model on the relabeled arms -- and the result is re-expressed on
+        # the original contrast. (Before this change only the
+        # propensities were reversed, so arm-1 patients were weighted by
+        # 1/(1-e), which is not a reversal of anything.)
+        import dataclasses
+
+        reversed_patients = [
+            dataclasses.replace(p, treatment_arm=1 - p.treatment_arm) for p in patients
+        ]
         reversed_propensities = {pid: 1.0 - p for pid, p in propensity_scores.items()}
-        reversed_estimate = _aipw_risk_difference(patients, reversed_propensities)
+        reversed_estimate = _aipw_risk_difference(reversed_patients, reversed_propensities)
         # Requirement 8.4 / Property 23: re-express on the original
         # contrast via the shared involution rather than negating inline
         # a second time, so this call site and `reverse_contrast`'s own
@@ -906,22 +1131,21 @@ def _execute_variant(
         return _executed(estimate)
 
     if variant.name == "stronger_selection_severity":
-        # Requirement 8.7: reads the stronger-observational-selection
-        # coefficients frozen in decisions.md (task 1.1) via
-        # cohorts.selection.STRONGER_SELECTION_COEFFICIENTS. This
-        # variant's execution is cohort *construction* (re-observationalizing
-        # under the stronger mechanism), not causal estimation on an
-        # already-retained population -- which is out of this function's
-        # scope (it receives `patients` already retained under the
-        # PRIMARY mechanism). The diagnostic reported here therefore only
-        # confirms the frozen coefficients are readable and well-formed,
-        # not a re-estimated effect under the stronger mechanism; a
-        # top-level runner that re-invokes the observationalization
-        # pipeline with `selection_severity="stronger"` is where the real
-        # re-estimate belongs.
-        from cohorts.selection import STRONGER_SELECTION_COEFFICIENTS
-
-        estimate = float(STRONGER_SELECTION_COEFFICIENTS.selection_logit_intercept)
+        # Requirement 8.7: IPCW-AIPW on the cohort retained under the
+        # Section 26 stronger mechanism, with propensities refit on that
+        # cohort. `patients` was retained under the primary mechanism, so
+        # the caller must supply the re-observationalized cohort
+        # (`build_stronger_selection_cohort`). (Before this change the
+        # variant reported the frozen selection intercept, +1.2, as its
+        # "estimate" -- a coefficient, not an effect.)
+        if stronger_selection_cohort is None:
+            raise SensitivityVariantNotExecutable(
+                "no stronger-selection cohort was supplied; pass "
+                "stronger_selection_cohort=build_stronger_selection_cohort(...)"
+            )
+        estimate = _aipw_risk_difference(
+            stronger_selection_cohort.patients, stronger_selection_cohort.propensity_scores
+        )
         return _executed(estimate)
 
     raise SensitivityConfigError(f"no execution branch registered for variant {variant.name!r}")
@@ -931,6 +1155,7 @@ def _aipw_risk_difference(
     patients: Sequence[PatientRecord],
     propensity_scores: Mapping[str, float],
     horizon_weeks: float | None = None,
+    clip_preset: str | None = None,
 ) -> float:
     """The primary IPCW-AIPW 96-week risk-difference point estimate --
     the one quantity every diagnostic-only variant branch above falls
@@ -940,4 +1165,6 @@ def _aipw_risk_difference(
     from causal.baselines import HORIZON_WEEKS, ipcw_aipw
 
     resolved_horizon = horizon_weeks if horizon_weeks is not None else HORIZON_WEEKS
-    return ipcw_aipw(patients, propensity_scores, resolved_horizon).estimate
+    return ipcw_aipw(
+        patients, propensity_scores, resolved_horizon, inverse_weight_clip_preset=clip_preset
+    ).estimate

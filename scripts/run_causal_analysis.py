@@ -89,7 +89,7 @@ from causal.negative_controls import (
     run_negative_control_exposure,
     run_negative_control_outcome,
 )
-from causal.overlap import OverlapDiagnostics
+from causal.overlap import OverlapDiagnostics, trim_to_common_support
 from causal.propensity import LogisticPropensityModel
 from cohorts.cohort_construction import PatientRecord
 from cohorts.cohort_flow import build_cohort_flow_table
@@ -98,7 +98,12 @@ from cohorts.sealed_reference import unadjusted_cox_reference_estimator
 from data.loaders.actg175 import Actg175DataNotFoundError, load_actg175
 from data.loaders.actg175_adapter import raw_tables_to_pipeline_inputs
 from evaluation.release_gate import evaluate_release
-from evaluation.robustness import SensitivityRobustness, SensitivityStabilityResult
+from evaluation.robustness import (
+    SensitivityRobustness,
+    SensitivityStabilityResult,
+    SupportPopulation,
+    build_stronger_selection_cohort,
+)
 from infra.config import ResolvedConfig, load_config
 from infra.manifest import ManifestPrivacyError, ManifestWriter, resolve_git_provenance
 from infra.readiness import SENSITIVITY_VARIANT_KIND, append_ledger_entry
@@ -228,15 +233,19 @@ def _build_protocol_records(patients: list[PatientRecord]) -> list[PatientProtoc
     return records
 
 
-def _run_temporal_witness(patients: list[PatientRecord], spec: TargetTrialSpec) -> WitnessResult:
+def _run_temporal_witness(
+    patients: list[PatientRecord],
+    spec: TargetTrialSpec,
+    held_out_cd4_cd8_mae: float | None = None,
+    factual_baseline_cd4_cd8_mae: float | None = None,
+) -> WitnessResult:
     """Evaluate the temporal witness on the retained cohort.
 
-    Held-out longitudinal-error inputs (`held_out_cd4_cd8_mae`,
-    `factual_baseline_cd4_cd8_mae`) are not available -- this script does
-    not train the sequence-GRU baseline (see module docstring) -- so that
-    sub-condition is left `None`, and `TemporalWitness.evaluate` correctly
-    classifies the overall result as `"uncertain"` rather than guessing a
-    value for a check this script cannot actually perform.
+    The held-out longitudinal-error inputs (`held_out_cd4_cd8_mae`,
+    `factual_baseline_cd4_cd8_mae`) need both trained neural models. This
+    script trains neither, so it leaves them `None` and
+    `TemporalWitness.evaluate` reports `"uncertain"` rather than guessing.
+    `scripts/run_replication.py`, which trains both, passes real values.
     """
     timelines_and_specs = [
         (_adapt_to_eligibility_timeline(patient), spec) for patient in patients
@@ -269,8 +278,8 @@ def _run_temporal_witness(patients: list[PatientRecord], spec: TargetTrialSpec) 
         event_times=paired_event_times,
         assignment_times=assignment_times,
         landmark_timestamps=landmark_timestamps,
-        held_out_cd4_cd8_mae=None,
-        factual_baseline_cd4_cd8_mae=None,
+        held_out_cd4_cd8_mae=held_out_cd4_cd8_mae,
+        factual_baseline_cd4_cd8_mae=factual_baseline_cd4_cd8_mae,
     )
 
 
@@ -373,47 +382,69 @@ def run_causal_analysis(
     propensity_model = LogisticPropensityModel(seed=derive_seed(master_seed, "propensity"))
     cross_fitted = propensity_model.fit_cross_fitted(dev_patients, n_folds=PROPENSITY_N_FOLDS)
 
+    # 1b. Common-support trimming (`decisions.md` Section 26 amendment of
+    # 2026-10-12, item B): patients outside the primary band leave the
+    # estimation population before anything is estimated or checked.
+    # Everything below runs on `analysis_patients`; the count trimmed per
+    # arm is reported in the summary and manifest.
+    support_trim = trim_to_common_support(dev_patients, cross_fitted.propensity_scores)
+    analysis_patients = list(support_trim.retained)
+
     # 2. Run all six frozen causal baselines.
-    causal_estimates = run_all_baselines(dev_patients, cross_fitted.propensity_scores)
+    causal_estimates = run_all_baselines(analysis_patients, cross_fitted.propensity_scores)
 
     # 3. Overlap/support diagnostics.
     overlap_report = OverlapDiagnostics.compute(
-        dev_patients, cross_fitted.propensity_scores, spec.adjustment_set
+        analysis_patients, cross_fitted.propensity_scores, spec.adjustment_set
     )
 
     # 4. Negative controls.
     negative_control_seed = derive_seed(master_seed, "negative_controls")
     exposure_result = run_negative_control_exposure(
-        dev_patients,
+        analysis_patients,
         cross_fitted.propensity_scores,
         seed=negative_control_seed,
         n_bootstrap=negative_control_n_bootstrap,
     )
     outcome_result = run_negative_control_outcome(
-        dev_patients,
+        analysis_patients,
         spec.adjustment_set,
         seed=negative_control_seed,
         n_bootstrap=negative_control_n_bootstrap,
     )
 
     # 5. Witnesses.
-    temporal_result = _run_temporal_witness(dev_patients, spec)
+    temporal_result = _run_temporal_witness(analysis_patients, spec)
 
     # Task 15.1: execute the eight frozen sensitivity variants and feed
-    # the real `overall_stability` boolean to the causal witness, in
-    # place of the hardcoded `sensitivity_stable=False` this script used
-    # before `evaluation.robustness.SensitivityRobustness.run_executed`
-    # existed. `undetermined` (any variant unexecuted, e.g.
-    # `boosted_propensity_model` without xgboost) maps to `False` exactly
-    # like the prior placeholder did -- it can never read as stability
-    # (Requirement 8.9) -- while a genuine `"stable"` determination now
-    # flows through for the first time.
+    # the real `overall_stability` boolean to the causal witness.
+    # `undetermined` (any variant unexecuted, e.g.
+    # `boosted_propensity_model` without the `boosted` extra) maps to
+    # `False` -- it can never read as stability (Requirement 8.9).
+    #
+    # The stronger-selection variant needs its own cohort: the identical
+    # pipeline (same seeds, same split) observationalized under the
+    # Section 26 stronger mechanism, with propensities refit on it.
+    stronger_selection_cohort = build_stronger_selection_cohort(
+        timelines,
+        treatment_arms,
+        spec,
+        pipeline_seed,
+        propensity_seed=derive_seed(master_seed, "propensity"),
+        n_folds=PROPENSITY_N_FOLDS,
+        precomputed_endpoint_results=endpoint_results,
+    )
     sensitivity_result: SensitivityStabilityResult = SensitivityRobustness.run_executed(
         resolved_config,
-        dev_patients,
+        analysis_patients,
         cross_fitted.propensity_scores,
         master_seed=master_seed,
         adjustment_set=spec.adjustment_set,
+        stronger_selection_cohort=stronger_selection_cohort,
+        support_population=SupportPopulation(
+            patients=tuple(dev_patients), propensity_scores=cross_fitted.propensity_scores
+        ),
+        propensity_n_folds=PROPENSITY_N_FOLDS,
     )
     sensitivity_stable = sensitivity_result.overall_stability == "stable"
 
@@ -424,7 +455,7 @@ def run_causal_analysis(
         negative_control_outcome_result=outcome_result,
     )
     clinical_result = ClinicalWitness.evaluate(
-        _build_protocol_records(dev_patients), spec
+        _build_protocol_records(analysis_patients), spec
     )
     witness_results = [temporal_result, causal_result, clinical_result]
     aggregate_decision: AggregateDecision = aggregate(witness_results, WitnessPolicy.ALL_REQUIRED)
@@ -504,6 +535,7 @@ def run_causal_analysis(
             "dev_retained_count": len(dev_patients),
             "arm_0_count": sum(1 for p in dev_patients if p.treatment_arm == 0),
             "arm_1_count": sum(1 for p in dev_patients if p.treatment_arm == 1),
+            "common_support_trim": support_trim.to_dict(),
         }
     )
     manifest.set_feature_list(list(spec.adjustment_set))
@@ -550,8 +582,10 @@ def run_causal_analysis(
     # (explicitly empty, not omitted -- see `build_audit_report`'s
     # docstring).
     split_hash = _split_hash([patient.patient_id for patient in dev_patients])
-    supported_count = len(dev_patients)
-    abstained_count = 0  # this script has no patient-level support gate.
+    # The estimation population is the trimmed one; trimmed patients are
+    # counted as abstained (no patient-level gate otherwise runs here).
+    supported_count = len(analysis_patients)
+    abstained_count = len(support_trim.trimmed_patient_ids)
     for estimate in causal_estimates:
         audit_report = build_audit_report(
             protocol=spec,
@@ -653,6 +687,8 @@ def run_causal_analysis(
     return {
         "experiment_id": experiment_id,
         "dev_retained_count": len(dev_patients),
+        "common_support_trim": support_trim.to_dict(),
+        "analysis_population_count": len(analysis_patients),
         "causal_estimates": {e.name: e.estimate for e in causal_estimates},
         "overlap_support_valid": overlap_report.support_valid,
         "negative_control_exposure": exposure_result.classification,
@@ -755,6 +791,12 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     print(f"dev retained: {summary['dev_retained_count']} patients")
+    trim = summary["common_support_trim"]
+    print(
+        f"common-support trim {trim['band']}: removed {len(trim['trimmed_patient_ids'])} "
+        f"(by arm {trim['trimmed_count_by_arm']}); "
+        f"estimation population {summary['analysis_population_count']}"
+    )
     print(f"causal estimates: {summary['causal_estimates']}")
     print(f"overlap support_valid: {summary['overlap_support_valid']}")
     print(f"negative_control_exposure: {summary['negative_control_exposure']}")

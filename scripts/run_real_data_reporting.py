@@ -385,8 +385,15 @@ def build_experiment_json(
         precomputed_endpoint_results=endpoint_results,
     )
     dev_ids = set(pipeline_result.dev.retained_patient_ids)
+    # The same estimation population `run_causal_analysis` used: the
+    # retained dev split minus the patients its common-support trim removed
+    # (`decisions.md` Section 26 amendment of 2026-10-12, item B), so the
+    # interval and the results row describe the estimate actually reported.
+    trimmed_ids = set(analysis_summary["common_support_trim"]["trimmed_patient_ids"])
     dev_patients = [
-        patient for patient in pipeline_result.split_cohorts.dev if patient.patient_id in dev_ids
+        patient
+        for patient in pipeline_result.split_cohorts.dev
+        if patient.patient_id in dev_ids and patient.patient_id not in trimmed_ids
     ]
 
     release_gate_passed = analysis_summary["aggregate_decision_passed"]
@@ -603,7 +610,7 @@ def run_synthetic_benchmark_scenario(scenario, seed: int) -> dict[str, Any]:
 
     from causal.adjustment_set import ADJUSTMENT_SET_NAMES
     from causal.baselines import ipcw_aipw
-    from causal.overlap import OverlapDiagnostics
+    from causal.overlap import OverlapDiagnostics, trim_to_common_support
     from causal.propensity import LogisticPropensityModel
     from evaluation.release_gate import evaluate_release
     from witnesses.causal import CausalWitness
@@ -623,7 +630,22 @@ def run_synthetic_benchmark_scenario(scenario, seed: int) -> dict[str, Any]:
             "error": f"{type(exc).__name__}: {exc}",
         }
 
-    estimate = ipcw_aipw(dev_patients, cross_fitted.propensity_scores)
+    # The same common-support trim the real-data path applies (Section 26
+    # amendment of 2026-10-12, item B), so this stays the identical pipeline.
+    support_trim = trim_to_common_support(dev_patients, cross_fitted.propensity_scores)
+    dev_patients = list(support_trim.retained)
+
+    try:
+        estimate = ipcw_aipw(dev_patients, cross_fitted.propensity_scores)
+    except Exception as exc:  # noqa: BLE001 -- e.g. trimming left too few patients to fit
+        return {
+            "scenario_name": scenario.name,
+            "diagnostic_label": _SYNTHETIC_DIAGNOSTIC_LABEL,
+            "true_risk_difference": scenario.true_risk_difference,
+            "realized_average_treatment_effect": cohort.realized_average_treatment_effect,
+            "common_support_trim": support_trim.to_dict(),
+            "error": f"{type(exc).__name__}: {exc}",
+        }
     recovery_error = abs(estimate.estimate - scenario.true_risk_difference)
 
     overlap_report = OverlapDiagnostics.compute(

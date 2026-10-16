@@ -552,3 +552,77 @@ class OverlapDiagnostics:
             smd_exclusions=smd_exclusions,
             smd_basis=SMD_BASIS,
         )
+
+
+# ---------------------------------------------------------------------------
+# Common-support trimming (`decisions.md` Section 26 amendment of
+# 2026-10-12, item B)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class CommonSupportTrim:
+    """The result of `trim_to_common_support`.
+
+    Attributes:
+        retained: the patients inside the band, in input order -- the
+            estimation population every causal estimate, diagnostic, and
+            witness then runs on.
+        trimmed_patient_ids: the patients removed, sorted.
+        trimmed_count_by_arm: `{arm: count}` removed, for both arms (zero
+            included), so the report always states what trimming did.
+        band: the `(lower, upper)` band applied.
+    """
+
+    retained: tuple[PatientRecord, ...]
+    trimmed_patient_ids: tuple[str, ...]
+    trimmed_count_by_arm: dict[int, int]
+    band: tuple[float, float]
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "band": list(self.band),
+            "retained_count": len(self.retained),
+            "trimmed_patient_ids": list(self.trimmed_patient_ids),
+            "trimmed_count_by_arm": {str(arm): n for arm, n in self.trimmed_count_by_arm.items()},
+        }
+
+
+def trim_to_common_support(
+    patients: Sequence[PatientRecord],
+    propensities: Mapping[str, float],
+    lower: float = PRIMARY_SUPPORT_LOWER,
+    upper: float = PRIMARY_SUPPORT_UPPER,
+) -> CommonSupportTrim:
+    """Remove patients whose propensity lies outside `[lower, upper]`.
+
+    The frozen trimming rule (`decisions.md` Section 26 amendment of
+    2026-10-12, item B): before the support check, every patient outside
+    the Section 12 primary common-support band `[0.10, 0.90]` of the
+    primary (logistic) propensity model is removed from the estimation
+    population. Applied the same way to every analysis population -- every
+    split, every seed, every sensitivity variant that refits the primary
+    propensity model. A positivity warning resolved this way counts as
+    resolved under Section 12's fourth condition, and the count removed
+    per arm is always reported.
+
+    This changes the estimand to the patients with overlap. Propensities
+    are not refit after trimming: the band is defined by the fit that
+    produced it.
+    """
+    retained: list[PatientRecord] = []
+    trimmed: list[str] = []
+    trimmed_by_arm: dict[int, int] = {_ARM_0_COMPARATOR: 0, _ARM_1_INTERVENTION: 0}
+    for patient in patients:
+        propensity = _propensity_for(patient, propensities)
+        if lower <= propensity <= upper:
+            retained.append(patient)
+        else:
+            trimmed.append(patient.patient_id)
+            trimmed_by_arm[patient.treatment_arm] = trimmed_by_arm.get(patient.treatment_arm, 0) + 1
+    return CommonSupportTrim(
+        retained=tuple(retained),
+        trimmed_patient_ids=tuple(sorted(trimmed)),
+        trimmed_count_by_arm=trimmed_by_arm,
+        band=(lower, upper),
+    )

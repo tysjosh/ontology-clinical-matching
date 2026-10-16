@@ -189,3 +189,48 @@ def test_stability_criterion_description_is_reported_verbatim() -> None:
     assert _determine_overall_stability(outcomes) == "stable"
     assert isinstance(STABILITY_CRITERION_DESCRIPTION, str)
     assert len(STABILITY_CRITERION_DESCRIPTION) > 0
+
+
+# ---------------------------------------------------------------------------
+# Stability is judged against the primary estimate's direction, including
+# every component estimate (two clipping presets, two support bands).
+# ---------------------------------------------------------------------------
+
+
+def test_agreement_with_primary_direction_is_stable() -> None:
+    outcomes = [_outcome(f"v{i}", "executed", "negative") for i in range(8)]
+    assert _determine_overall_stability(outcomes, primary_direction="negative") == "stable"
+
+
+def test_unanimous_variants_against_the_primary_direction_are_unstable() -> None:
+    """The majority rule would call eight agreeing variants stable even if
+    all of them reversed the primary estimate; the primary-direction rule
+    does not."""
+    outcomes = [_outcome(f"v{i}", "executed", "positive") for i in range(8)]
+    assert _determine_overall_stability(outcomes) == "stable"
+    assert _determine_overall_stability(outcomes, primary_direction="negative") == "unstable"
+
+
+def test_a_contradicting_component_estimate_is_not_hidden() -> None:
+    outcomes = [_outcome(f"v{i}", "executed", "negative") for i in range(7)]
+    outcomes.append(
+        SensitivityVariantOutcome(
+            name="alternative_weight_clipping",
+            status="executed",
+            estimate=-0.1,
+            ci_low=None,
+            ci_high=None,
+            scale="risk_difference",
+            diagnostic_status="undetermined",
+            direction="negative",
+            failure_reason=None,
+            resolved_config_hash=None,
+            component_estimates=(("sensitivity_narrow", -0.1), ("sensitivity_wide", 0.05)),
+        )
+    )
+    assert _determine_overall_stability(outcomes, primary_direction="negative") == "unstable"
+
+
+def test_a_null_primary_direction_has_no_opposite() -> None:
+    outcomes = [_outcome(f"v{i}", "executed", "positive") for i in range(8)]
+    assert _determine_overall_stability(outcomes, primary_direction="null") == "stable"

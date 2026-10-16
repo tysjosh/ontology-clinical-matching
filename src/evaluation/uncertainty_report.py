@@ -279,3 +279,105 @@ def error_at_matched_coverage_for_gated_vs_ungated(
         confidence_scores_b=ungated_confidence_scores,
     )
     return risk_gated, risk_ungated
+
+
+# ---------------------------------------------------------------------------
+# Cohort-level `uncertainty_valid` (`decisions.md` Section 26 amendment of
+# 2026-10-12, item A)
+# ---------------------------------------------------------------------------
+
+#: Section 15's deep-ensemble size, restated here (rather than imported from
+#: the torch-only `models.torch_training`) so this module stays torch-free;
+#: `tests/frozen/test_decisions_match.py` pins both copies to 5.
+REQUIRED_ENSEMBLE_REPLICAS: int = 5
+
+
+@dataclass(frozen=True)
+class UncertaintyValidity:
+    """The release gate's `uncertainty_valid` input, with its three parts.
+
+    Attributes:
+        valid: all three parts hold.
+        ensemble_complete: exactly `REQUIRED_ENSEMBLE_REPLICAS` replicas
+            finished training.
+        calibration_finite: calibration was fitted on validation data and
+            gave a finite slope and intercept.
+        supported_population_nonempty: at least one evaluated patient is
+            `patient_supported` (Section 16).
+        reasons: one pass/fail string per part, always populated.
+    """
+
+    valid: bool
+    ensemble_complete: bool
+    calibration_finite: bool
+    supported_population_nonempty: bool
+    reasons: tuple[str, ...]
+
+
+def evaluate_uncertainty_validity(
+    replicas_trained: int,
+    calibration: CalibrationResult | None,
+    supported_flags: Sequence[bool],
+) -> UncertaintyValidity:
+    """The frozen cohort-level `uncertainty_valid` rule.
+
+    `decisions.md` Section 16 names `uncertainty_valid` in the release
+    condition without defining it; the Section 26 amendment of 2026-10-12
+    (item A) freezes it as procedural validity, with no new threshold.
+    It holds exactly when:
+
+    1. the deep ensemble has the `REQUIRED_ENSEMBLE_REPLICAS` replicas
+       Section 15 requires, all trained to completion (training raises
+       `TrainingDivergedError` otherwise, so a caller only reaches here with
+       a count of replicas that finished);
+    2. calibration was fitted on validation data only (Section 15; the only
+       way to obtain a `CalibrationResult` here is
+       `fit_calibration_on_validation`) and gave a finite slope and
+       intercept;
+    3. the supported population (`patient_supported`, Section 16) on the
+       evaluated split is not empty.
+
+    It certifies that the uncertainty machinery ran correctly, not that
+    uncertainty is low.
+
+    Args:
+        replicas_trained: how many ensemble replicas finished training.
+        calibration: the validation-fitted calibration, or `None` if none
+            could be fitted (which fails part 2).
+        supported_flags: one `SupportDecision.supported` per evaluated
+            patient.
+    """
+    import math
+
+    ensemble_complete = replicas_trained == REQUIRED_ENSEMBLE_REPLICAS
+    calibration_finite = (
+        calibration is not None
+        and math.isfinite(calibration.calibration_slope)
+        and math.isfinite(calibration.calibration_intercept)
+    )
+    supported_count = sum(1 for flag in supported_flags if flag)
+    supported_population_nonempty = supported_count > 0
+
+    def _status(ok: bool) -> str:
+        return "pass" if ok else "fail"
+
+    reasons = (
+        f"ensemble_complete: {_status(ensemble_complete)} "
+        f"({replicas_trained} of {REQUIRED_ENSEMBLE_REPLICAS} replicas trained)",
+        f"calibration_finite: {_status(calibration_finite)} "
+        + (
+            "(no validation calibration fitted)"
+            if calibration is None
+            else f"(slope={calibration.calibration_slope}, "
+            f"intercept={calibration.calibration_intercept})"
+        ),
+        f"supported_population_nonempty: {_status(supported_population_nonempty)} "
+        f"({supported_count} of {len(supported_flags)} patients supported)",
+    )
+    return UncertaintyValidity(
+        valid=ensemble_complete and calibration_finite and supported_population_nonempty,
+        ensemble_complete=ensemble_complete,
+        calibration_finite=calibration_finite,
+        supported_population_nonempty=supported_population_nonempty,
+        reasons=reasons,
+    )

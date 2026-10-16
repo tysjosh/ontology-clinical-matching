@@ -190,6 +190,45 @@ def test_boosted_model_hyperparameters_match_decisions_md_section_11():
     assert BoostedPropensityModel.LEARNING_RATE == 0.05
 
 
-def test_boosted_model_raises_missing_dependency_error(patients):
-    with pytest.raises(MissingDependencyError):
+def test_boosted_model_raises_missing_dependency_error_without_xgboost(patients, monkeypatch):
+    """With `xgboost` not importable, the model refuses rather than
+    substituting another algorithm. `sys.modules["xgboost"] = None` makes
+    `import xgboost` raise ImportError whether or not it is installed."""
+    import sys
+
+    monkeypatch.setitem(sys.modules, "xgboost", None)
+    with pytest.raises(MissingDependencyError, match="boosted"):
         BoostedPropensityModel().fit_cross_fitted(patients, n_folds=5)
+
+
+def test_boosted_model_cross_fits_with_xgboost(patients):
+    """With `xgboost` installed: full coverage, valid probabilities, and
+    the same cross-fitting non-leakage as the logistic model."""
+    pytest.importorskip("xgboost")
+    result = BoostedPropensityModel(seed=7).fit_cross_fitted(patients, n_folds=5)
+
+    assert set(result.propensity_scores) == {p.patient_id for p in patients}
+    assert all(0.0 < score < 1.0 for score in result.propensity_scores.values())
+    for fold in range(result.n_folds):
+        training_ids = set(result.training_patient_ids_by_fold[fold])
+        assert training_ids & set(result.prediction_ids_for(fold)) == set()
+
+
+def test_boosted_model_is_seed_locked_and_reproducible(patients):
+    """"Seed-locked" (`decisions.md` Section 11): two fits at the same seed
+    give bitwise-identical scores."""
+    pytest.importorskip("xgboost")
+    first = BoostedPropensityModel(seed=11).fit_cross_fitted(patients, n_folds=5)
+    second = BoostedPropensityModel(seed=11).fit_cross_fitted(patients, n_folds=5)
+    assert first.propensity_scores == second.propensity_scores
+
+
+def test_boosted_model_uses_the_frozen_hyperparameters():
+    """The training parameters carry the Section 11 values; `eta` is
+    xgboost's native name for `learning_rate`, and `N_ESTIMATORS` is the
+    number of boosting rounds."""
+    params = BoostedPropensityModel(seed=3).booster_params()
+    assert params["max_depth"] == 3
+    assert params["eta"] == 0.05
+    assert params["seed"] == 3
+    assert BoostedPropensityModel.N_ESTIMATORS == 200

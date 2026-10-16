@@ -260,6 +260,10 @@ class SeedResult:
             no separate held-out split beyond dev/val/test exists for the
             development-stage replication loop, and the real Test_Split
             stays unopened per Requirement 18.3).
+        sensitivity_overall_stability: this seed's
+            `SensitivityStabilityResult.overall_stability`, so `aggregate`
+            can apply the frozen criterion's sensitivity half; `None` for
+            a result built without it.
     """
 
     seed: int
@@ -275,6 +279,7 @@ class SeedResult:
     release_decision: Any
     factual_metrics: Mapping[str, float | None]
     selective_metrics: Mapping[str, float | None]
+    sensitivity_overall_stability: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         release_decision = self.release_decision
@@ -292,6 +297,7 @@ class SeedResult:
             "release_decision": dataclasses.asdict(release_decision),
             "factual_metrics": dict(self.factual_metrics),
             "selective_metrics": dict(self.selective_metrics),
+            "sensitivity_overall_stability": self.sensitivity_overall_stability,
         }
 
 
@@ -367,6 +373,150 @@ def _neural_risk_difference(
     concordance = concordance_index(tuple(mean_factual), event_times, event_indicators)
 
     return risk_difference, {"concordance_index": concordance}
+
+
+def _uncertainty_validity_on_validation(
+    ensemble: Any,
+    val_batch: Any,
+    val_patients: Sequence[Any],
+    val_propensities: Mapping[str, float],
+    spec: Any,
+    device: str = "cpu",
+) -> tuple[Any, dict[str, Any]]:
+    """`uncertainty_valid` for the intervention-aware ensemble on the
+    validation split (`decisions.md` Section 26 amendment of 2026-10-12,
+    item A), with the support counts it rests on.
+
+    Per validation patient: the ensemble mean and population variance of
+    the factual-arm 96-week risk over the replicas (Section 15: ensemble
+    variance is the epistemic uncertainty); the frozen four-part
+    `patient_supported` condition (Section 16) via `PatientSupportGate`,
+    with the uncertainty threshold at the validation split's 90th
+    percentile of that variance, `protocol_valid` from
+    `ProtocolChecker.check`, and `no_hard_violation` from both the
+    protocol check and the temporal witness's hard (structural) checks on
+    that patient alone. Calibration is fitted on validation patients whose
+    96-week outcome is known (event by week 96, or followed to week 96).
+    """
+    import torch
+
+    scripts_dir = str(Path(__file__).resolve().parent)
+    if scripts_dir not in sys.path:
+        sys.path.insert(0, scripts_dir)
+    from run_causal_analysis import _build_protocol_records, _run_temporal_witness
+
+    from causal.baselines import HORIZON_WEEKS, _horizon_outcome, _observed_by_horizon
+    from causal.weighting import _percentile
+    from evaluation.uncertainty_report import (
+        evaluate_uncertainty_validity,
+        fit_calibration_on_validation,
+    )
+    from models.torch_intervention_aware import outcome_from_hazards
+    from models.torch_training import batch_to_device, factual_outputs
+    from protocols.consistency_checker import ProtocolChecker
+    from uncertainty.support_gate import PatientSupportGate
+
+    patients_by_id = {p.patient_id: p for p in val_patients}
+    batch = batch_to_device(val_batch, device)
+    with torch.no_grad():
+        per_replica = torch.stack(
+            [
+                outcome_from_hazards(factual_outputs(model, batch).hazards)
+                for model in ensemble.models
+            ]
+        ).cpu()
+    means = per_replica.mean(dim=0).tolist()
+    variances = per_replica.var(dim=0, unbiased=False).tolist()
+    patient_ids = list(val_batch.patient_ids)
+
+    threshold = _percentile(sorted(variances), 90.0) if variances else 0.0
+    protocol_violations = {
+        violation.patient_id
+        for violation in ProtocolChecker.check(_build_protocol_records(val_patients), spec)
+    }
+
+    supported_flags: list[bool] = []
+    for index, pid in enumerate(patient_ids):
+        temporal = _run_temporal_witness([patients_by_id[pid]], spec).evidence
+        temporal_hard_violation = not (
+            temporal["baseline_precedes_treatment_and_no_future_leakage"]["pass"]
+            and temporal["outcomes_after_time_zero"]["pass"]
+            and temporal["chronological_ordering_preserved"]["pass"]
+        )
+        protocol_valid = pid not in protocol_violations
+        decision = PatientSupportGate.evaluate(
+            propensity=val_propensities[pid],
+            ensemble_uncertainty=variances[index],
+            validation_uncertainty_90th_percentile=threshold,
+            protocol_valid=protocol_valid,
+            no_hard_violation=protocol_valid and not temporal_hard_violation,
+        )
+        supported_flags.append(decision.supported)
+
+    observed = [
+        (means[index], bool(_horizon_outcome(patients_by_id[pid], HORIZON_WEEKS)))
+        for index, pid in enumerate(patient_ids)
+        if _observed_by_horizon(patients_by_id[pid], HORIZON_WEEKS)
+    ]
+    calibration = None
+    if observed and len({label for _, label in observed}) == 2:
+        calibration = fit_calibration_on_validation(
+            [prediction for prediction, _ in observed], [label for _, label in observed]
+        )
+
+    validity = evaluate_uncertainty_validity(len(ensemble.models), calibration, supported_flags)
+    summary = {
+        "supported_count": sum(supported_flags),
+        "abstained_count": len(supported_flags) - sum(supported_flags),
+        "validation_uncertainty_90th_percentile": threshold,
+        "calibration_slope": None if calibration is None else calibration.calibration_slope,
+        "calibration_intercept": (
+            None if calibration is None else calibration.calibration_intercept
+        ),
+    }
+    return validity, summary
+
+
+def _ensemble_state_mae(ensemble: Any, val_batch: Any, device: str = "cpu") -> float | None:
+    """Held-out CD4/CD8 mean absolute error of an ensemble on `val_batch`,
+    for the temporal witness's longitudinal-error condition
+    (`decisions.md` Section 16: held-out error no worse than 5% above the
+    factual GRU baseline's).
+
+    The ensemble prediction is the mean of every replica's factual-arm
+    `state_pred`. Only the post-baseline landmarks (week 20 and week 96,
+    indices 1 and 2) are scored, CD4 and CD8, wherever the batch's mask
+    marks the value observed; masked-missing entries are never scored
+    against their placeholder. Neither model has read a landmark's own
+    measurement when predicting it (`decisions.md` Section 26 amendment
+    of 2026-10-12, item D), so the comparison is forecast against
+    forecast. Values are on the development-fitted standardized scale
+    `models.dataset` builds, the same for both models.
+
+    Returns `None` when no post-baseline entry is observed.
+    """
+    import torch
+
+    from models.torch_training import batch_to_device, factual_outputs
+
+    if len(val_batch.patient_ids) == 0:
+        return None
+    val_batch = batch_to_device(val_batch, device)
+    with torch.no_grad():
+        predictions = torch.stack(
+            [factual_outputs(model, val_batch).state_pred for model in ensemble.models]
+        ).mean(dim=0)
+    targets = torch.stack((val_batch.cd4, val_batch.cd8), dim=-1)
+    mask = torch.stack((val_batch.cd4_mask, val_batch.cd8_mask), dim=-1)
+    post_baseline = slice(1, None)
+    predictions = predictions[:, post_baseline]
+    targets = targets[:, post_baseline]
+    mask = mask[:, post_baseline]
+    observed = int(mask.sum())
+    if observed == 0:
+        return None
+    absolute_error = (predictions - targets).abs() * mask.to(predictions.dtype)
+    return float(absolute_error.sum() / observed)
 
 
 def run_seed(
@@ -446,11 +596,15 @@ def run_seed(
         run_negative_control_exposure,
         run_negative_control_outcome,
     )
-    from causal.overlap import OverlapDiagnostics
+    from causal.overlap import OverlapDiagnostics, trim_to_common_support
     from causal.propensity import LogisticPropensityModel
     from cohorts.pipeline import run_observationalization_pipeline
     from evaluation.release_gate import evaluate_release
-    from evaluation.robustness import SensitivityRobustness
+    from evaluation.robustness import (
+        SensitivityRobustness,
+        SupportPopulation,
+        build_stronger_selection_cohort,
+    )
     from infra.readiness import SEED_KIND, append_ledger_entry
     from infra.registry import DuplicateExperimentError, canonical_json, compute_experiment_id
     from infra.seeding import derive_seed
@@ -503,41 +657,64 @@ def run_seed(
         dev_patients, n_folds=resolved_propensity_n_folds
     )
 
+    # Common-support trimming (`decisions.md` Section 26 amendment of
+    # 2026-10-12, item B): the causal estimation population. Neural
+    # training below still uses every retained development patient.
+    support_trim = trim_to_common_support(dev_patients, cross_fitted.propensity_scores)
+    analysis_patients = list(support_trim.retained)
+
     overlap_report = OverlapDiagnostics.compute(
-        dev_patients, cross_fitted.propensity_scores, spec.adjustment_set
+        analysis_patients, cross_fitted.propensity_scores, spec.adjustment_set
     )
     negative_control_seed = derive_seed(seed, "negative_controls")
     exposure_result = run_negative_control_exposure(
-        dev_patients,
+        analysis_patients,
         cross_fitted.propensity_scores,
         seed=negative_control_seed,
         n_bootstrap=negative_control_n_bootstrap,
     )
     outcome_result = run_negative_control_outcome(
-        dev_patients,
+        analysis_patients,
         spec.adjustment_set,
         seed=negative_control_seed,
         n_bootstrap=negative_control_n_bootstrap,
     )
 
+    # The stronger-selection variant's cohort: the identical pipeline (same
+    # seeds, same split) under the Section 26 stronger mechanism, with
+    # propensities refit on it.
+    stronger_selection_cohort = build_stronger_selection_cohort(
+        raw_timelines,
+        treatment_arms,
+        spec,
+        pipeline_seed,
+        propensity_seed=derive_seed(seed, "propensity"),
+        n_folds=resolved_propensity_n_folds,
+        precomputed_endpoint_results=precomputed_endpoint_results,
+    )
     sensitivity_result = SensitivityRobustness.run_executed(
         resolved_config,
-        dev_patients,
+        analysis_patients,
         cross_fitted.propensity_scores,
         master_seed=seed,
         adjustment_set=spec.adjustment_set,
+        stronger_selection_cohort=stronger_selection_cohort,
+        support_population=SupportPopulation(
+            patients=tuple(dev_patients), propensity_scores=cross_fitted.propensity_scores
+        ),
+        propensity_n_folds=resolved_propensity_n_folds,
     )
     sensitivity_stable = sensitivity_result.overall_stability == "stable"
 
-    temporal_result = _run_temporal_witness(dev_patients, spec)
     causal_result = CausalWitness.evaluate(
         overlap_report=overlap_report,
         sensitivity_stable=sensitivity_stable,
         negative_control_exposure_result=exposure_result,
         negative_control_outcome_result=outcome_result,
     )
-    clinical_result = ClinicalWitness.evaluate(_build_protocol_records(dev_patients), spec)
-    witness_results = [temporal_result, causal_result, clinical_result]
+    clinical_result = ClinicalWitness.evaluate(_build_protocol_records(analysis_patients), spec)
+    # The temporal witness is evaluated after training (below), since its
+    # longitudinal-error condition needs both trained ensembles.
 
     # Content-hashed per-seed directory (Requirement 9.1, 9.2, 9.3, 9.9):
     # the identifier is `infra.registry.compute_experiment_id`, computed
@@ -596,18 +773,55 @@ def run_seed(
         checkpoint_dir=checkpoint_dir / "intervention_aware",
     )
 
-    primary_estimate, factual_metrics = _neural_risk_difference(
-        intervention_ensemble, val_batch, device=device
+    # Validation-split propensities, from the primary logistic model fit on
+    # the development split only (validation patients never enter the fit).
+    val_propensities = LogisticPropensityModel(seed=derive_seed(seed, "propensity")).fit_predict(
+        dev_patients, val_patients
     )
 
-    # `uncertainty_valid` has no computed value at this orchestrator's
-    # current scope (task 16.1's ensemble/support-gate machinery is not
-    # wired into this loop; `_neural_risk_difference`'s ensemble is used
-    # only for the point-estimate recovery and factual concordance
-    # above). Conservatively `False`, mirroring
-    # `scripts/run_causal_analysis.py`'s identical documented placeholder.
-    uncertainty_valid = False
-    release_decision = evaluate_release(overlap_report, witness_results, uncertainty_valid)
+    # The neural causal estimate uses the same common-support trim as every
+    # other causal estimate (Section 26 amendment of 2026-10-12, item B),
+    # applied to the validation split; factual metrics stay on the whole
+    # validation split.
+    val_trim = trim_to_common_support(val_patients, val_propensities)
+    val_estimation_batch = builder.build(list(val_trim.retained), "val")
+    primary_estimate, _ = _neural_risk_difference(
+        intervention_ensemble, val_estimation_batch, device=device
+    )
+    _, factual_metrics = _neural_risk_difference(intervention_ensemble, val_batch, device=device)
+
+    uncertainty_validity, support_summary = _uncertainty_validity_on_validation(
+        intervention_ensemble,
+        val_batch,
+        val_patients,
+        val_propensities,
+        spec,
+        device,
+    )
+
+    # Temporal witness, with the held-out longitudinal error of the
+    # intervention-aware ensemble against the factual Sequence_GRU
+    # baseline's (`decisions.md` Section 16's 5% condition).
+    intervention_state_mae = _ensemble_state_mae(intervention_ensemble, val_batch, device)
+    gru_state_mae = _ensemble_state_mae(gru_ensemble, val_batch, device)
+    factual_metrics = {
+        **factual_metrics,
+        "cd4_cd8_mae_intervention_aware": intervention_state_mae,
+        "cd4_cd8_mae_sequence_gru": gru_state_mae,
+    }
+    temporal_result = _run_temporal_witness(
+        dev_patients,
+        spec,
+        held_out_cd4_cd8_mae=intervention_state_mae,
+        factual_baseline_cd4_cd8_mae=gru_state_mae,
+    )
+    witness_results = [temporal_result, causal_result, clinical_result]
+
+    # The frozen `uncertainty_valid` rule (Section 26 amendment of
+    # 2026-10-12, item A), computed on the validation split.
+    release_decision = evaluate_release(
+        overlap_report, witness_results, uncertainty_validity.valid
+    )
 
     checkpoint_hashes: list[tuple[str, str]] = []
     for replica_dir_name, ensemble in (
@@ -643,14 +857,14 @@ def run_seed(
     replication_root = Path(results_root) / "replication"
     append_ledger_entry(replication_root, SEED_KIND, seed, resolved_config_hash)
 
-    # No selective-prediction metrics are computed at this orchestrator's
-    # current scope (task 16.1's `evaluate_uncertainty` needs ensemble
-    # variances and a validation-derived uncertainty threshold this loop
-    # does not assemble) -- an explicit, named placeholder rather than a
-    # silently empty dict, so a reader can see this gap was left on
-    # purpose.
-    selective_metrics: dict[str, float | None] = {
-        "note": None  # placeholder: evaluate_uncertainty not wired into this orchestrator yet
+    # The uncertainty-validity parts and the support counts on the
+    # validation split, plus what common-support trimming removed.
+    selective_metrics: dict[str, Any] = {
+        "uncertainty_valid": uncertainty_validity.valid,
+        "uncertainty_valid_reasons": list(uncertainty_validity.reasons),
+        **support_summary,
+        "dev_common_support_trim": support_trim.to_dict(),
+        "val_common_support_trim": val_trim.to_dict(),
     }
 
     return SeedResult(
@@ -667,6 +881,7 @@ def run_seed(
         release_decision=release_decision,
         factual_metrics=factual_metrics,
         selective_metrics=selective_metrics,
+        sensitivity_overall_stability=sensitivity_result.overall_stability,
     )
 
 
@@ -1032,7 +1247,8 @@ def main(argv: list[str] | None = None) -> int:
             released = first.release_decision.released
             print(
                 f"seed {seed}: primary_estimate={first.primary_estimate} "
-                f"released={released} witnesses={dict(first.witness_status)}",
+                f"released={released} witnesses={dict(first.witness_status)} "
+                f"sensitivity={first.sensitivity_overall_stability}",
                 flush=True,
             )
             if args.verify_determinism:
@@ -1042,7 +1258,15 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"seed {seed}: determinism verified (hashes match)", flush=True)
             seed_results.append(first)
 
-        summary = aggregate(seed_results)
+        # Both halves of the frozen criterion: seed agreement, and each
+        # seed's sensitivity result (a seed reading "unstable" blocks
+        # "stable").
+        summary = aggregate(
+            seed_results,
+            sensitivity_overall_stabilities=[
+                r.sensitivity_overall_stability or "undetermined" for r in seed_results
+            ],
+        )
         summary_path = write_replication_summary(summary, args.results_root)
     except Actg175DataNotFoundError as exc:
         print(

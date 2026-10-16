@@ -37,9 +37,14 @@ Section 25 froze the discrete-time hazard grid at 23 bins, independently of
 the landmark timepoints, and `design.md` Section 3.2 therefore specifies a
 single ``nn.Linear(hidden_size, 23)`` head reading the **final** hidden
 state (Requirement 2.3). The bin count is read from
-`models.dataset.SURVIVAL_BIN_COUNT`, never written as a literal here. State
-prediction still happens at each of the three landmarks, from that
-landmark's hidden state.
+`models.dataset.SURVIVAL_BIN_COUNT`, never written as a literal here.
+
+The state head is next-state regression, as Section 14.2 and the prototype
+specify: the prediction of landmark k comes from the hidden state before
+landmark k's CD4/CD8 is read (h_0 for landmark 0, h_{k-1} otherwise), and is
+stored at index k of `state_pred`. Until 2026-10 it read landmark k's own
+hidden state, so it partly reconstructed its input; see the `decisions.md`
+Section 26 amendment of 2026-10-12, item D.
 
 Frozen hidden width
 -------------------------------------------------------------------------
@@ -222,9 +227,10 @@ class SequenceOutput:
 
     Attributes:
         state_pred: `(N, N_LANDMARKS, STATE_DIM)` = `(N, 3, 2)` float,
-            `[cd4, cd8]` predicted at each landmark from that landmark's
-            hidden state (Requirement 2.3). Linear, no output activation,
-            matching the prototype's next-state head.
+            `[cd4, cd8]` predicted for each landmark k from the hidden state
+            *before* landmark k is read (h_0 for k = 0, h_{k-1} otherwise;
+            Requirement 2.3). Linear, no output activation -- the
+            prototype's next-state head.
         hazards: `(N, SURVIVAL_BIN_COUNT)` = `(N, 23)` float in `(0, 1)`,
             the per-bin discrete-time hazard probabilities over
             `decisions.md` Section 25's frozen bin grid. Probabilities, not
@@ -435,9 +441,20 @@ class TorchSequenceGRU(nn.Module):
 
         hidden_states, _final = self.gru(sequence_input, initial_hidden)
 
-        # State prediction at every landmark, from that landmark's hidden
-        # state; linear with no output activation (Requirement 2.3).
-        state_pred = self.state_head(hidden_states)
+        # Next-state regression (`decisions.md` Section 14.2: "next
+        # patient-state (CD4/CD8) regression"), one prediction per landmark
+        # (Requirement 2.3). The prediction *of* landmark k is read from the
+        # hidden state *before* landmark k's CD4/CD8 is consumed: h_0 (the
+        # baseline-initialized state) for landmark 0, and h_{k-1} for
+        # landmark k. So no landmark's prediction has seen that landmark's
+        # own measurement, matching the prototype's shifted-by-one targets
+        # (`sequence_baseline.SequenceTrainingSample.target_next_states`)
+        # while keeping the `(N, 3, 2)` "value at landmark k" layout every
+        # loss and metric indexes. Linear, no output activation.
+        preceding_hidden = torch.cat(
+            (initial_hidden.transpose(0, 1), hidden_states[:, :-1, :]), dim=1
+        )
+        state_pred = self.state_head(preceding_hidden)
 
         # One hazard per frozen survival bin, from the final landmark's
         # hidden state (`design.md` Section 3.2). Sigmoid, so `hazards`

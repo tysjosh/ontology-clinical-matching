@@ -448,3 +448,32 @@ def test_malformed_batch_shapes_are_rejected(model, batch):
     fewer_rows = dataclasses.replace(batch, treatment_arm=batch.treatment_arm[:-1])
     with pytest.raises(ValueError, match="row count"):
         model(fewer_rows)
+
+
+def test_state_prediction_for_a_landmark_never_sees_that_landmarks_measurement(model, batch):
+    """Next-state regression (`decisions.md` Section 14.2): changing the
+    CD4/CD8 observed at landmark k leaves the predictions for landmarks
+    0..k unchanged, and moves only the predictions for later landmarks."""
+    import dataclasses
+
+    with torch.no_grad():
+        reference = model(batch).state_pred
+        for landmark in range(N_LANDMARKS):
+            cd4 = batch.cd4.clone()
+            cd8 = batch.cd8.clone()
+            cd4[:, landmark] += 5.0
+            cd8[:, landmark] -= 5.0
+            perturbed = model(dataclasses.replace(batch, cd4=cd4, cd8=cd8)).state_pred
+
+            assert torch.equal(perturbed[:, : landmark + 1], reference[:, : landmark + 1])
+            if landmark + 1 < N_LANDMARKS:
+                assert not torch.equal(perturbed[:, landmark + 1 :], reference[:, landmark + 1 :])
+
+
+def test_first_landmark_prediction_comes_from_the_baseline_initialized_state(model, batch):
+    """Landmark 0 is predicted from h_0 alone, which the baseline
+    covariates set (Requirement 2.1)."""
+    with torch.no_grad():
+        output = model(batch)
+        h0 = torch.tanh(model.state_init_projection(batch.state_init))
+        assert torch.allclose(output.state_pred[:, 0], model.state_head(h0))

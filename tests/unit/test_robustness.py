@@ -408,7 +408,10 @@ class TestRunExecuted:
         assert len(result.variant_outcomes) == 8
         assert [o.name for o in result.variant_outcomes] == EXPECTED_SENSITIVITY_NAMES
 
-    def test_boosted_propensity_model_is_recorded_unexecuted_without_xgboost(self):
+    def test_boosted_propensity_model_is_recorded_unexecuted_without_xgboost(self, monkeypatch):
+        import sys
+
+        monkeypatch.setitem(sys.modules, "xgboost", None)
         base = _base_resolved_config()
         patients = _causal_cohort()
         propensities = _flat_propensities(patients)
@@ -423,8 +426,8 @@ class TestRunExecuted:
         assert boosted.estimate is None
         assert "boosted_propensity_model" in result.unexecuted_variants
 
-    def test_remaining_variants_still_execute_after_boosted_fails(self):
-        """Requirement 8.10: one variant failing does not stop the rest."""
+    def test_boosted_propensity_model_executes_with_xgboost(self):
+        pytest.importorskip("xgboost")
         base = _base_resolved_config()
         patients = _causal_cohort()
         propensities = _flat_propensities(patients)
@@ -432,16 +435,38 @@ class TestRunExecuted:
         result = SensitivityRobustness.run_executed(
             base, patients, propensities, master_seed=42, adjustment_set=[]
         )
-        executed = [o for o in result.variant_outcomes if o.name != "boosted_propensity_model"]
+        boosted = next(o for o in result.variant_outcomes if o.name == "boosted_propensity_model")
 
+        assert boosted.status == "executed", boosted.failure_reason
+        assert boosted.estimate is not None
+
+    def test_remaining_variants_still_execute_after_one_fails(self, monkeypatch):
+        """Requirement 8.10: one variant failing does not stop the rest.
+        With xgboost hidden and no stronger-selection cohort supplied,
+        exactly those two are unexecuted, and every other variant still
+        runs."""
+        import sys
+
+        monkeypatch.setitem(sys.modules, "xgboost", None)
+        base = _base_resolved_config()
+        patients = _causal_cohort()
+        propensities = _flat_propensities(patients)
+
+        result = SensitivityRobustness.run_executed(
+            base, patients, propensities, master_seed=42, adjustment_set=[]
+        )
+        expected_unexecuted = {"boosted_propensity_model", "stronger_selection_severity"}
+        executed = [o for o in result.variant_outcomes if o.name not in expected_unexecuted]
+
+        assert set(result.unexecuted_variants) == expected_unexecuted
         assert all(o.status == "executed" for o in executed), [
             (o.name, o.status, o.failure_reason) for o in executed
         ]
 
     def test_an_unexecuted_variant_forces_overall_stability_undetermined(self):
-        """Requirement 8.9: boosted_propensity_model is always unexecuted
-        here (no xgboost), so overall_stability must always be
-        'undetermined', never 'stable'."""
+        """Requirement 8.9: with no stronger-selection cohort supplied, that
+        variant is unexecuted, so overall_stability is 'undetermined',
+        never 'stable'."""
         base = _base_resolved_config()
         patients = _causal_cohort()
         propensities = _flat_propensities(patients)
@@ -468,22 +493,56 @@ class TestRunExecuted:
         assert week_20.status == "executed"
         assert week_20.resolved_config_hash is not None
 
-    def test_increased_missingness_uses_a_seed_derived_from_master_seed_and_name(self):
-        """Requirement 8.5: executes without raising, under a seed derived
-        from (master_seed, variant_name) -- confirmed indirectly here by
-        asserting the variant executes cleanly; the derivation itself is
-        exercised directly in `tests/unit/test_seeding.py`."""
+    def test_increased_missingness_executes_and_is_reproducible(self):
+        """Requirement 8.5 / Section 26 amendment item C: the variant runs
+        under its frozen rate and seed, and a rerun gives the same value."""
         base = _base_resolved_config()
         patients = _causal_cohort()
         propensities = _flat_propensities(patients)
 
-        result = SensitivityRobustness.run_executed(
-            base, patients, propensities, master_seed=42, adjustment_set=[]
+        def _missingness_estimate():
+            result = SensitivityRobustness.run_executed(
+                base, patients, propensities, master_seed=42, adjustment_set=[]
+            )
+            return next(
+                o for o in result.variant_outcomes if o.name == "increased_missingness_stress"
+            )
+
+        first = _missingness_estimate()
+        assert first.status == "executed", first.failure_reason
+        assert first.estimate is not None
+        assert _missingness_estimate().estimate == first.estimate
+
+    def test_lab_missingness_deletes_at_the_frozen_rate_completely_at_random(self):
+        from evaluation.robustness import (
+            INCREASED_MISSINGNESS_FIELDS,
+            INCREASED_MISSINGNESS_RATE,
+            apply_lab_missingness,
         )
-        missingness = next(
-            o for o in result.variant_outcomes if o.name == "increased_missingness_stress"
+
+        assert INCREASED_MISSINGNESS_RATE == 0.40
+        assert INCREASED_MISSINGNESS_FIELDS == ("baseline_cd4", "baseline_cd8")
+
+        patients = _causal_cohort(n_per_arm=500)
+        perturbed = apply_lab_missingness(patients, INCREASED_MISSINGNESS_RATE, seed=7)
+
+        assert [p.patient_id for p in perturbed] == [p.patient_id for p in patients]
+        deleted = sum(
+            1 for p in perturbed if p.timeline.static_covariates.get("baseline_cd4") is None
         )
-        assert missingness.status == "executed"
+        assert abs(deleted / len(perturbed) - INCREASED_MISSINGNESS_RATE) < 0.04
+        # Other covariates and the input records themselves are untouched.
+        assert all(p.timeline.static_covariates["baseline_cd4"] == 300.0 for p in patients)
+        assert all(p.timeline.static_covariates["karnofsky_score"] == 90.0 for p in perturbed)
+        # Same seed, same deletions; different seed, different deletions.
+        again = apply_lab_missingness(patients, INCREASED_MISSINGNESS_RATE, seed=7)
+        other = apply_lab_missingness(patients, INCREASED_MISSINGNESS_RATE, seed=8)
+
+        def _pattern(records):
+            return [r.timeline.static_covariates.get("baseline_cd4") is None for r in records]
+
+        assert _pattern(again) == _pattern(perturbed)
+        assert _pattern(other) != _pattern(perturbed)
 
     def test_treatment_comparator_reversal_negates_the_primary_estimate_direction(self):
         """Requirement 8.4: the reported direction refers to the original
@@ -505,9 +564,58 @@ class TestRunExecuted:
         assert reversal.status == "executed"
         assert reversal.estimate is not None
 
-    def test_stronger_selection_severity_reads_the_frozen_amended_coefficients(self):
-        from cohorts.selection import STRONGER_SELECTION_COEFFICIENTS
+    def test_treatment_comparator_reversal_recovers_the_primary_estimate(self):
+        """Reversing both the arm labels and the propensities, then
+        re-expressing on the original contrast, gives back the primary
+        IPCW-AIPW estimate: the estimator treats the two arms
+        symmetrically, so a correct reversal is an identity."""
+        from causal.baselines import ipcw_aipw
 
+        base = _base_resolved_config()
+        patients = _causal_cohort()
+        propensities = {
+            p.patient_id: 0.3 + 0.4 * (int(p.patient_id[1:]) % 7) / 6 for p in patients
+        }
+
+        result = SensitivityRobustness.run_executed(
+            base, patients, propensities, master_seed=42, adjustment_set=[]
+        )
+        reversal = next(
+            o for o in result.variant_outcomes if o.name == "treatment_comparator_reversal"
+        )
+        primary = ipcw_aipw(patients, propensities).estimate
+
+        assert reversal.estimate == pytest.approx(primary, abs=1e-9)
+
+    def test_stronger_selection_severity_estimates_on_the_supplied_cohort(self):
+        from causal.baselines import ipcw_aipw
+        from evaluation.robustness import StrongerSelectionCohort
+
+        base = _base_resolved_config()
+        patients = _causal_cohort()
+        propensities = _flat_propensities(patients)
+        stronger_patients = tuple(patients[:80])
+        stronger_propensities = {p.patient_id: 0.4 for p in stronger_patients}
+
+        result = SensitivityRobustness.run_executed(
+            base,
+            patients,
+            propensities,
+            master_seed=42,
+            adjustment_set=[],
+            stronger_selection_cohort=StrongerSelectionCohort(
+                patients=stronger_patients, propensity_scores=stronger_propensities
+            ),
+        )
+        stronger = next(
+            o for o in result.variant_outcomes if o.name == "stronger_selection_severity"
+        )
+
+        assert stronger.status == "executed"
+        expected = ipcw_aipw(list(stronger_patients), stronger_propensities).estimate
+        assert stronger.estimate == pytest.approx(expected)
+
+    def test_stronger_selection_severity_refuses_without_a_cohort(self):
         base = _base_resolved_config()
         patients = _causal_cohort()
         propensities = _flat_propensities(patients)
@@ -518,9 +626,59 @@ class TestRunExecuted:
         stronger = next(
             o for o in result.variant_outcomes if o.name == "stronger_selection_severity"
         )
+        assert stronger.status == "unexecuted"
+        assert "stronger-selection cohort" in stronger.failure_reason
 
-        assert stronger.status == "executed"
-        assert stronger.estimate == STRONGER_SELECTION_COEFFICIENTS.selection_logit_intercept
+    def test_weight_clipping_and_support_report_both_frozen_settings(self):
+        """Section 11 names two sensitivity clipping presets and Section 12
+        two support bands; both are estimated and reported as components,
+        and each is a risk difference, not a weight or a fraction."""
+        base = _base_resolved_config()
+        patients = _causal_cohort()
+        propensities = _flat_propensities(patients)
+
+        result = SensitivityRobustness.run_executed(
+            base, patients, propensities, master_seed=42, adjustment_set=[]
+        )
+        by_name = {o.name: o for o in result.variant_outcomes}
+        clipping = by_name["alternative_weight_clipping"]
+        support = by_name["alternative_support_thresholds"]
+
+        assert [label for label, _ in clipping.component_estimates] == [
+            "sensitivity_narrow",
+            "sensitivity_wide",
+        ]
+        assert [label for label, _ in support.component_estimates] == [
+            "sensitivity_0.05_0.95",
+            "primary_0.10_0.90",
+        ]
+        from causal.baselines import ipcw_aipw
+
+        for outcome in (clipping, support):
+            assert outcome.estimate == outcome.component_estimates[0][1]
+        for preset, value in clipping.component_estimates:
+            expected = ipcw_aipw(patients, propensities, inverse_weight_clip_preset=preset)
+            assert value == pytest.approx(expected.estimate)
+
+    def test_inverse_weight_clipping_changes_only_the_weights(self):
+        """With varied propensities, clipping moves the estimate; with no
+        preset, `ipcw_aipw` is exactly the primary formula."""
+        from causal.baselines import ipcw_aipw
+
+        patients = _causal_cohort()
+        # Distinct values per patient, so the 5th/95th percentiles fall
+        # strictly inside the range (a few repeated values would put both
+        # bounds on the min and max, and clipping would be a no-op).
+        propensities = {
+            p.patient_id: 0.02 + 0.96 * index / (len(patients) - 1)
+            for index, p in enumerate(patients)
+        }
+        primary = ipcw_aipw(patients, propensities).estimate
+        explicit_none = ipcw_aipw(patients, propensities, inverse_weight_clip_preset=None)
+        wide = ipcw_aipw(patients, propensities, inverse_weight_clip_preset="sensitivity_wide")
+
+        assert explicit_none.estimate == primary
+        assert wide.estimate != primary
 
     def test_every_executed_outcome_carries_a_resolved_config_hash_and_scale(self):
         base = _base_resolved_config()

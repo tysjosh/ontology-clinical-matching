@@ -641,6 +641,7 @@ def ipcw_aipw(
     patients: Sequence[PatientRecord],
     propensity_scores: Mapping[str, float],
     horizon_weeks: float = HORIZON_WEEKS,
+    inverse_weight_clip_preset: str | None = None,
 ) -> CausalEstimate:
     """Baseline 6 (primary): augmented IPW 96-week risk difference.
 
@@ -656,10 +657,35 @@ def ipcw_aipw(
     probability at `min(elapsed_i, horizon)` (see
     `_censoring_ipcw_weights`; note the formula divides by the censoring
     *survival probability*, equivalently multiplying by the IPCW weight).
+
+    `inverse_weight_clip_preset` exists for the
+    `alternative_weight_clipping` sensitivity variant (`decisions.md`
+    Section 11's sensitivity clipping). `None` (the default, every primary
+    caller) leaves the formula above exactly as written. A
+    `causal.weighting.CLIP_PRESETS` name clamps every patient's
+    inverse-propensity weight (`1/e_i` for arm 1, `1/(1-e_i)` for arm 0)
+    into that preset's percentile bounds, computed over all patients,
+    before the augmentation term uses it -- so only the weights change,
+    never the outcome model or the censoring weights.
     """
     mu1, mu0, outcomes = _outcome_regression_predictions(patients, horizon_weeks)
     ipcw_weights = _censoring_ipcw_weights(patients, horizon_weeks)
     n = len(patients)
+
+    clipped_inverse_weights: dict[str, float] | None = None
+    if inverse_weight_clip_preset is not None:
+        from causal.weighting import clip_weights
+
+        raw_inverse_weights: dict[str, float] = {}
+        for patient in patients:
+            e_i = propensity_scores[patient.patient_id]
+            if patient.treatment_arm == 1 and e_i > 0.0:
+                raw_inverse_weights[patient.patient_id] = 1.0 / e_i
+            elif patient.treatment_arm != 1 and e_i < 1.0:
+                raw_inverse_weights[patient.patient_id] = 1.0 / (1.0 - e_i)
+        clipped_inverse_weights = dict(
+            clip_weights(raw_inverse_weights, preset=inverse_weight_clip_preset)
+        )
 
     augmentation_sum = 0.0
     plug_in_sum = 0.0
@@ -671,6 +697,15 @@ def ipcw_aipw(
         e_i = propensity_scores[pid]
         y_i = outcomes[pid]
         ipcw_i = ipcw_weights[pid]
+        if clipped_inverse_weights is not None:
+            if pid not in clipped_inverse_weights:
+                continue  # e_i of exactly 0 or 1: no finite weight, as below
+            weight_i = clipped_inverse_weights[pid]
+            if patient.treatment_arm == 1:
+                augmentation_sum += weight_i * (y_i - mu1[pid]) * ipcw_i
+            else:
+                augmentation_sum -= weight_i * (y_i - mu0[pid]) * ipcw_i
+            continue
         if patient.treatment_arm == 1:
             if e_i > 0.0:
                 augmentation_sum += (1.0 / e_i) * (y_i - mu1[pid]) * ipcw_i

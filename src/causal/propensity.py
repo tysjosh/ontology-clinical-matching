@@ -31,17 +31,17 @@ Consequently:
   and a fold that does not converge raises `SolverConvergenceError`. Until
   task 7.8 this was 500 fixed gradient-descent steps with no tolerance,
   which left the 14-column fit unconverged (gradient norm ~1e-2).
-- `BoostedPropensityModel` stores the exact frozen hyperparameters
-  (`MAX_DEPTH=3`, `N_ESTIMATORS=200`, `LEARNING_RATE=0.05`) as class
-  constants, satisfies the shared `PropensityModel` protocol structurally,
-  but its `fit_cross_fitted()` deliberately raises
-  `MissingDependencyError` rather than silently substituting a different
-  algorithm and calling it "gradient boosting." It is explicitly a
-  **sensitivity-only** model (`decisions.md` Section 11: "never primary"),
-  so the pipeline's primary path never depends on it. Revisit this once
-  `xgboost` is added as an approved project dependency -- at that point
-  `fit_cross_fitted()` should be implemented against the real library
-  using exactly the frozen hyperparameters already stored here.
+- `BoostedPropensityModel` is real gradient boosting via `xgboost`, which
+  lives in the optional `boosted` extra (`pip install -e ".[boosted]"`),
+  never in the base install. It uses exactly the frozen hyperparameters
+  (`MAX_DEPTH=3`, `N_ESTIMATORS=200`, `LEARNING_RATE=0.05`), the same
+  fold-safe feature vector and cross-fitting as the logistic model, and a
+  seed-locked, single-threaded exact tree method so a rerun reproduces
+  every score. When `xgboost` is not importable, `fit_cross_fitted()`
+  raises `MissingDependencyError` rather than silently substituting a
+  different algorithm and calling it "gradient boosting." It is explicitly
+  a **sensitivity-only** model (`decisions.md` Section 11: "never
+  primary"), so the pipeline's primary path never depends on it.
 
 Cross-fitting
 --------------
@@ -143,7 +143,7 @@ import math
 import statistics
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from causal.adjustment_set import (
     ADJUSTMENT_COVARIATES_BY_NAME,
@@ -529,6 +529,17 @@ class LogisticPropensityModel:
             predictions[patient.patient_id] = _sigmoid(logit)
         return predictions
 
+    def fit_predict(
+        self, train_patients: Sequence[PatientRecord], predict_patients: Sequence[PatientRecord]
+    ) -> dict[str, float]:
+        """Fit once on `train_patients` and score `predict_patients`.
+
+        For scoring a held-out split (validation or test) with a model fit
+        on the development split only; `predict_patients` never enters the
+        fit. Raises `SolverConvergenceError` if the fit does not converge.
+        """
+        return self._predict(self._fit(train_patients), predict_patients)
+
     def fit_cross_fitted(
         self, data: Sequence[PatientRecord], n_folds: int = 5
     ) -> CrossFittedPredictions:
@@ -562,36 +573,47 @@ class MissingDependencyError(RuntimeError):
     `decisions.md` Section 11 freezes the sensitivity propensity model as
     gradient boosting via `XGBoost` with fixed hyperparameters
     (`max_depth=3`, `n_estimators=200`, `learning_rate=0.05`). `xgboost` is
-    not currently an approved project dependency (see `pyproject.toml`), so
-    this model deliberately refuses to run rather than silently substituting
-    a different algorithm and calling it gradient boosting.
+    an optional dependency (the `boosted` extra), so when it is absent this
+    model refuses to run rather than silently substituting a different
+    algorithm and calling it gradient boosting.
     """
 
     def __init__(self) -> None:
         super().__init__(
             "BoostedPropensityModel.fit_cross_fitted() requires xgboost, which "
-            "is not currently a project dependency (see pyproject.toml). This "
-            "model is the decisions.md Section 11 sensitivity-only propensity "
-            "specification (never primary); add xgboost as an approved "
-            "dependency and implement this method against it -- using exactly "
-            "MAX_DEPTH, N_ESTIMATORS, and LEARNING_RATE below -- before using "
-            "BoostedPropensityModel for a sensitivity run."
+            "is not installed. It is the decisions.md Section 11 "
+            "sensitivity-only propensity model (never primary); install the "
+            "optional extra with `pip install -e \".[boosted]\"` (pins "
+            "xgboost==3.2.0) to run it."
         )
 
 
 class BoostedPropensityModel:
-    """Sensitivity-only propensity model: frozen gradient-boosting hyperparameters.
+    """Sensitivity-only propensity model: frozen gradient boosting via XGBoost.
 
     `decisions.md` Section 11: "sensitivity model: gradient boosting (fixed
     config: XGBoost, max_depth=3, n_estimators=200, learning_rate=0.05,
     seed-locked) -- ... WILL, as sensitivity analysis only, never primary."
 
-    `xgboost` is not an approved runtime dependency yet (see module
-    docstring), so `fit_cross_fitted()` raises `MissingDependencyError`
-    rather than pretending to run gradient boosting via a substitute
-    algorithm. The frozen hyperparameters are still stored here as class
-    constants so they are available for documentation/provenance and ready
-    to use once `xgboost` is added.
+    Each fold fits an `xgboost.XGBClassifier` with exactly the three frozen
+    hyperparameters below, on the same fold-safe feature vector the
+    logistic model uses (`_fit_standardization` fitted on that fold's
+    training patients only, then `_feature_vector`), through the shared
+    `_cross_fit` routine -- so the two models differ only in the learner.
+    Training uses xgboost's native `xgboost.train` API (see
+    `booster_params`), not its scikit-learn wrapper.
+
+    Settings not named in Section 11 are fixed for reproducibility, not
+    tuned: `seed=self.seed` ("seed-locked"), `nthread=1` and
+    `tree_method="exact"` (no thread-order or histogram-binning
+    nondeterminism), and xgboost's defaults for everything else (no row or
+    column subsampling, so the seed has nothing random to drive and every
+    rerun is bitwise identical). The scores are used unclipped, exactly as
+    the logistic model's are.
+
+    Raises `MissingDependencyError` at fit time (never at import time) when
+    `xgboost` is not installed, so this module stays importable in the base,
+    torch-free and xgboost-free environment.
     """
 
     #: Frozen `decisions.md` Section 11 hyperparameters -- do not change
@@ -603,7 +625,63 @@ class BoostedPropensityModel:
     def __init__(self, seed: int = 0) -> None:
         self.seed = seed
 
+    def _xgboost(self) -> Any:
+        """The `xgboost` module, or `MissingDependencyError` if absent."""
+        try:
+            import xgboost
+        except ImportError:
+            raise MissingDependencyError() from None
+        return xgboost
+
+    def booster_params(self) -> dict[str, Any]:
+        """The native-API training parameters for every fold.
+
+        Uses `xgboost.train` rather than the scikit-learn wrapper, which
+        would add scikit-learn as a dependency. `eta` is xgboost's native
+        name for `learning_rate`; the number of trees (`N_ESTIMATORS`) is
+        passed to `xgboost.train` as `num_boost_round`.
+        """
+        return {
+            "objective": "binary:logistic",
+            "max_depth": self.MAX_DEPTH,
+            "eta": self.LEARNING_RATE,
+            "seed": self.seed,
+            "nthread": 1,
+            "tree_method": "exact",
+            "verbosity": 0,
+        }
+
     def fit_cross_fitted(
         self, data: Sequence[PatientRecord], n_folds: int = 5
     ) -> CrossFittedPredictions:
-        raise MissingDependencyError()
+        # Resolve the dependency once, up front, so a missing xgboost fails
+        # before any fold is touched rather than partway through.
+        xgboost = self._xgboost()
+        params = self.booster_params()
+
+        def fit_predict_fold(
+            train_patients: Sequence[PatientRecord], holdout_patients: Sequence[PatientRecord]
+        ) -> dict[str, float]:
+            if not train_patients:
+                raise ValueError("Cannot fit BoostedPropensityModel on zero training patients")
+            standardization = _fit_standardization(train_patients)
+            features = [_feature_vector(p, standardization) for p in train_patients]
+            labels = [int(p.treatment_arm) for p in train_patients]
+            if len(set(labels)) < 2:
+                raise ValueError(
+                    "BoostedPropensityModel needs both arms in every training fold; "
+                    f"got only arm {labels[0]!r} in a fold of {len(labels)} patients"
+                )
+            booster = xgboost.train(
+                params,
+                xgboost.DMatrix(features, label=labels),
+                num_boost_round=self.N_ESTIMATORS,
+            )
+            holdout_features = [_feature_vector(p, standardization) for p in holdout_patients]
+            probabilities = booster.predict(xgboost.DMatrix(holdout_features))
+            return {
+                patient.patient_id: float(probabilities[index])
+                for index, patient in enumerate(holdout_patients)
+            }
+
+        return _cross_fit(data, n_folds, fit_predict_fold)

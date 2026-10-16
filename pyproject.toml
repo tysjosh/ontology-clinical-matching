@@ -42,6 +42,20 @@ neural = [
     "torch==2.4.1",
     "numpy==1.26.4",
 ]
+# Gradient-boosting library for the `boosted_propensity_model` sensitivity
+# variant only (`decisions.md` Section 11: "sensitivity model: gradient
+# boosting (fixed config: XGBoost, max_depth=3, n_estimators=200,
+# learning_rate=0.05, seed-locked) ... sensitivity analysis only, never
+# primary"). Kept out of the base install so every primary path stays
+# torch-free and xgboost-free; `causal.propensity.BoostedPropensityModel`
+# raises `MissingDependencyError` when this extra is absent. scipy is
+# xgboost's own runtime dependency, pinned here so a fresh install is
+# reproducible; numpy matches the `neural` pin.
+boosted = [
+    "xgboost==3.2.0",
+    "scipy==1.17.1",
+    "numpy==1.26.4",
+]
 dev = [
     "pytest==8.3.3",
     "pytest-cov==5.0.0",
@@ -51,6 +65,7 @@ dev = [
     # `dev` is the full development environment, so it pulls the tensor stack
     # in. A base (`pip install .`) or test-only install still gets neither.
     "causal-witness-pwm[neural]",
+    "causal-witness-pwm[boosted]",
 ]
 
 [tool.setuptools.packages.find]

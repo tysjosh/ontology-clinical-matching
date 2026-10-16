@@ -251,8 +251,12 @@ def synthetic_inputs():
     # run_seed's propensity cross-fitting (even at TEST_PROPENSITY_N_FOLDS)
     # needs enough per-fold training patients for the logistic fit to
     # converge, which run_ablations.py's harness never exercises (it has
-    # no propensity model at all).
-    return _build_small_synthetic_inputs(n_per_arm=40)
+    # no propensity model at all). Since the common-support trim (decisions.md
+    # Section 26 amendment of 2026-10-12, item B), the cohort must also be
+    # large enough that the 14-column propensity fit does not overfit to
+    # extreme scores and trim the estimation population below what the
+    # outcome regression can be fit on.
+    return _build_small_synthetic_inputs(n_per_arm=100)
 
 
 #: 2-fold rather than the frozen 5-fold cross-fitting: at this fixture's

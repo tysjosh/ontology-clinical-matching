@@ -631,3 +631,39 @@ def test_sealed_format_version_is_2():
     from cohorts.sealed_reference import SEALED_FORMAT_VERSION
 
     assert SEALED_FORMAT_VERSION == 2
+
+
+# ---------------------------------------------------------------------------
+# decisions.md Section 26 amendments of 2026-10-12 (release-gate inputs).
+# ---------------------------------------------------------------------------
+
+
+def test_section_26_2026_10_12_increased_missingness_rate_and_fields():
+    """Item C: the stress test deletes baseline CD4 and CD8 at 0.40."""
+    from evaluation.robustness import INCREASED_MISSINGNESS_FIELDS, INCREASED_MISSINGNESS_RATE
+
+    amendment_log = _amendment_log_text()
+    assert "probability **0.40**" in amendment_log
+    assert INCREASED_MISSINGNESS_RATE == 0.40
+    assert INCREASED_MISSINGNESS_FIELDS == ("baseline_cd4", "baseline_cd8")
+
+
+def test_section_26_2026_10_12_trimming_uses_the_primary_band():
+    """Item B: trimming removes patients outside the Section 12 primary
+    band, and that band is still [0.10, 0.90]."""
+    import inspect
+
+    from causal.overlap import PRIMARY_SUPPORT_LOWER, PRIMARY_SUPPORT_UPPER, trim_to_common_support
+
+    assert "**Common-support trimming.**" in _amendment_log_text()
+    defaults = inspect.signature(trim_to_common_support).parameters
+    assert defaults["lower"].default == PRIMARY_SUPPORT_LOWER == 0.10
+    assert defaults["upper"].default == PRIMARY_SUPPORT_UPPER == 0.90
+
+
+def test_section_26_2026_10_12_uncertainty_valid_is_procedural():
+    """Item A: three procedural parts and the Section 15 ensemble size."""
+    from evaluation.uncertainty_report import REQUIRED_ENSEMBLE_REPLICAS
+
+    assert "**procedural validity**" in _amendment_log_text()
+    assert REQUIRED_ENSEMBLE_REPLICAS == 5

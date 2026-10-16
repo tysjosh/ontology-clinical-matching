@@ -37,7 +37,7 @@ from dataclasses import dataclass
 from cohorts.cohort_construction import RandomizedCohort, build_randomized_cohort
 from cohorts.preprocessing import DEFAULT_CONTINUOUS_FIELDS, DevelopmentSet, FittedPreprocessing
 from cohorts.sealed_reference import ReferenceEstimator, SealedReference, placeholder_estimator
-from cohorts.selection import ObservationalizedSplit, observationalize
+from cohorts.selection import ObservationalizedSplit, SelectionSeverity, observationalize
 from cohorts.splitting import SplitCohorts, stratified_patient_split
 from data.timelines import PatientTimeline as DataPatientTimeline
 from infra.seeding import derive_seed
@@ -83,6 +83,7 @@ def run_observationalization_pipeline(
     split_fractions: tuple[float, float, float] = (0.6, 0.2, 0.2),
     preprocessing_fields: tuple[str, ...] | None = None,
     precomputed_endpoint_results: Mapping[str, EndpointResult] | None = None,
+    selection_severity: SelectionSeverity = "primary",
 ) -> ObservationalizationPipelineResult:
     """Run the complete frozen Section-9 order-of-operations pipeline.
 
@@ -134,6 +135,15 @@ def run_observationalization_pipeline(
             mapping here, since the real ACTG175 data provides only a
             composite outcome with no per-component breakdown (see that
             module's docstring).
+        selection_severity: which frozen selection mechanism steps 5-8
+            apply, forwarded to every `observationalize` call. `"primary"`
+            (the default) is the `decisions.md` Section 9 mechanism used
+            by every primary result; `"stronger"` is the Section 26
+            amendment's mechanism, used only by the
+            `stronger_selection_severity` sensitivity variant. Steps 1-4
+            (cohort, sealed reference, split, preprocessing) and every
+            seed are identical under both, so the two pipelines differ
+            only in which patients selection retains.
 
     Returns:
         An `ObservationalizationPipelineResult` bundling every stage's
@@ -170,13 +180,22 @@ def run_observationalization_pipeline(
     # split-specific seed per split (no random-number stream reused across
     # splits).
     dev_result = observationalize(
-        split_cohorts.dev, fitted_preprocessing, seed=derive_seed(master_seed, "dev")
+        split_cohorts.dev,
+        fitted_preprocessing,
+        seed=derive_seed(master_seed, "dev"),
+        selection_severity=selection_severity,
     )
     val_result = observationalize(
-        split_cohorts.val, fitted_preprocessing, seed=derive_seed(master_seed, "val")
+        split_cohorts.val,
+        fitted_preprocessing,
+        seed=derive_seed(master_seed, "val"),
+        selection_severity=selection_severity,
     )
     test_result = observationalize(
-        split_cohorts.test, fitted_preprocessing, seed=derive_seed(master_seed, "test")
+        split_cohorts.test,
+        fitted_preprocessing,
+        seed=derive_seed(master_seed, "test"),
+        selection_severity=selection_severity,
     )
 
     return ObservationalizationPipelineResult(
