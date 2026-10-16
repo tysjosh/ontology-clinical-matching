@@ -401,6 +401,9 @@ def test_seed_everything_seeds_torch_and_enables_deterministic_algorithms():
         torch_training.seed_everything(42)
         first = torch.rand(4)
         assert torch.are_deterministic_algorithms_enabled()
+        # Full fp32 on CUDA: TF32 off for both matmul and cuDNN (Req 5.5).
+        assert torch.backends.cuda.matmul.allow_tf32 is False
+        assert torch.backends.cudnn.allow_tf32 is False
         torch_training.seed_everything(42)
         assert torch.equal(torch.rand(4), first)
     finally:

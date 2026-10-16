@@ -362,8 +362,14 @@ def test_cpu_and_cuda_runs_agree_and_are_recorded_in_the_manifest(kind, tmp_path
         max_abs_diff(cpu.train_loss_curve, cuda.train_loss_curve),
         max_abs_diff(cpu.val_loss_curve, cuda.val_loss_curve),
     )
-    cpu_weights = cpu.model.state_dict()
-    cuda_weights = {name: t.detach().cpu() for name, t in cuda.model.state_dict().items()}
+    # Empty tensors (e.g. the intervention-aware model's zero-length
+    # `placebo_vector` buffer outside placebo mode) hold nothing to compare,
+    # and `max()` over zero elements raises; they are skipped.
+    cpu_weights = {n: t for n, t in cpu.model.state_dict().items() if t.numel() > 0}
+    cuda_weights = {
+        name: t.detach().cpu() for name, t in cuda.model.state_dict().items() if t.numel() > 0
+    }
+    assert cpu_weights.keys() == cuda_weights.keys()
     weight_diff = max(max_abs_diff(cpu_weights[n], cuda_weights[n]) for n in cpu_weights)
     curves_agree = torch.allclose(
         torch.tensor(cpu.train_loss_curve + cpu.val_loss_curve, dtype=torch.float64),

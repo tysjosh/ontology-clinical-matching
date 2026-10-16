@@ -248,6 +248,13 @@ def seed_everything(seed: int) -> None:
     """
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
+    # Full fp32 on CUDA (Requirement 5.5). PyTorch lets cuDNN -- which runs
+    # the GRU layers -- use TF32 by default on Ampere and newer GPUs, and
+    # TF32's 10-bit mantissa moved CPU/CUDA final weights apart by ~1e-4 on
+    # an H200 (5 full-batch epochs); with TF32 off they agree to ~1e-7.
+    # Both switches are set explicitly; neither has any effect on CPU.
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.allow_tf32 = False
     use_deterministic = getattr(torch, "use_deterministic_algorithms", None)
     if use_deterministic is not None:
         try:
