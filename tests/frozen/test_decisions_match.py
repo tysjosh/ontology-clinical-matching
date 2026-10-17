@@ -667,3 +667,25 @@ def test_section_26_2026_10_12_uncertainty_valid_is_procedural():
 
     assert "**procedural validity**" in _amendment_log_text()
     assert REQUIRED_ENSEMBLE_REPLICAS == 5
+
+
+def test_section_26_2026_10_16_neural_models_read_the_adjustment_set():
+    """Both neural models read the full Section 13 adjustment set, and the
+    GRU's hazard head reads the time-zero hidden state only."""
+    pytest.importorskip("torch")
+    from causal.propensity import COVARIATE_FIELDS
+    from models.dataset import PatientDatasetBuilder
+    from models.torch_intervention_aware import TorchInterventionAwareModel
+    from models.torch_sequence_gru import OUTCOME_HIDDEN_INDEX, TorchSequenceGRU
+
+    amendment_log = _amendment_log_text()
+    assert "**Both models read the full development-standardized Section 13" in amendment_log
+    assert "**Stopping rule, frozen with this entry:**" in amendment_log
+
+    dimensions = PatientDatasetBuilder().dimensions
+    assert len(COVARIATE_FIELDS) == dimensions.baseline_covariate_width == 14
+    assert TorchSequenceGRU(dimensions).state_init_projection.in_features == 14
+    intervention_aware = TorchInterventionAwareModel(dimensions)
+    assert intervention_aware.state_channel_width == 14
+    assert intervention_aware.representation_width == 14 + 3 + 2
+    assert OUTCOME_HIDDEN_INDEX == 0

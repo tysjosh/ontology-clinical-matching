@@ -30,14 +30,22 @@ central-difference numerical gradient becomes autograd) and the *batching*
 (per-patient Python lists become `(N, ...)` tensors read off a
 `models.dataset.TensorBatch`).
 
-Widths: `hidden_size = 16` and the 4/3/2 channel widths are frozen in
-`decisions.md` Section 25. Each encoder's *output* width equals its input
-width, which is that section's own arithmetic: "three concatenated encoder
-channels (`STATE_INPUT_DIM=4 + INTERVENTION_INPUT_DIM=3 +
-PROTOCOL_INPUT_DIM=2 = 9`-wide input per landmark)". So the concatenated
-representation is 9 wide in every mode (Correctness Property 13).
+Widths: `hidden_size = 16` is frozen in `decisions.md` Section 25. Each
+encoder's *output* width equals its input width. The intervention (3) and
+protocol (2) widths are Section 25's; the state channel's width is the
+adjustment set's, `DatasetDimensions.baseline_covariate_width` (14 on the
+real cohort), since the Section 26 amendment of 2026-10-16. The
+concatenated representation (19 on the real cohort) is the same width in
+every mode (Correctness Property 13).
 
-Which tensors feed which channel (and why)
+**State channel since 2026-10-16:** `TensorBatch.baseline`, the full
+development-standardized Section 13 adjustment set, so the counterfactual
+contrast is adjusted for every confounder the causal estimators adjust for.
+The history below describes the four-field `state_init` input it replaced,
+which omitted symptomatic status, prior opportunistic infection and prior
+ART -- three of the six covariates the observationalization selects on.
+
+Which tensors fed which channel before 2026-10-16 (and why)
 -------------------------------------------------------------------------
 
 - **state channel** <- `TensorBatch.state_init`, the `(N, 4)`
@@ -311,9 +319,10 @@ class SharedRolloutInputs:
     test.
 
     Attributes:
-        baseline: `(N, baseline_covariate_width)`, carried through unread by
-            any encoder (see module docstring).
-        state: `(N, STATE_INPUT_DIM)`, the state channel's input.
+        baseline: `(N, baseline_covariate_width)`, the Section 13
+            adjustment set.
+        state: the state channel's input -- the same object as `baseline`
+            since the `decisions.md` Section 26 amendment of 2026-10-16.
         protocol: `(N, PROTOCOL_INPUT_DIM)`, the protocol channel's input
             after `ProtocolMode` is applied.
         cd4_mask: `(N, LANDMARK_COUNT)` bool, `True = observed`.
@@ -483,9 +492,17 @@ class TorchInterventionAwareModel(nn.Module):
         self.landmark_count = dimensions.landmark_count
         self.survival_bin_count = dimensions.survival_bin_count
 
-        # Encoder output widths are fixed at construction and equal to the
-        # frozen input widths, independent of either mode (Requirement 3.3).
-        self.state_encoder = nn.Linear(dimensions.state_width, dimensions.state_width)
+        # Encoder output widths are fixed at construction and equal to their
+        # input widths, independent of either mode (Requirement 3.3). The
+        # state channel reads the full Section 13 adjustment set
+        # (`TensorBatch.baseline`), so the model can adjust for every
+        # confounder the causal estimators adjust for (decisions.md Section 26
+        # amendment of 2026-10-16; until then it read the four-field
+        # `state_init` block, missing symptomatic status, prior OI and prior
+        # ART, three of the six selection confounders).
+        self.state_encoder = nn.Linear(
+            dimensions.baseline_covariate_width, dimensions.baseline_covariate_width
+        )
         self.intervention_encoder = nn.Linear(
             dimensions.intervention_width, dimensions.intervention_width
         )
@@ -530,8 +547,9 @@ class TorchInterventionAwareModel(nn.Module):
     @property
     def representation_width(self) -> int:
         """`len(z) = len(z_state) + len(z_intervention) + len(z_protocol)`,
-        the prototype's `concatenate_channels` arithmetic and Section 25's
-        `4 + 3 + 2 = 9`."""
+        the prototype's `concatenate_channels` arithmetic: `14 + 3 + 2 = 19`
+        on the real cohort since the Section 26 amendment of 2026-10-16
+        (state channel = the adjustment set)."""
         return (
             self.state_channel_width
             + self.intervention_channel_width
@@ -570,8 +588,9 @@ class TorchInterventionAwareModel(nn.Module):
 
         `rollout_both_arms` calls this exactly once and hands the result to
         both arms, so every field is the same object in both rollouts
-        (Requirement 3.6). `batch.baseline`, `batch.state_init`,
-        `batch.cd4_mask`, and `batch.cd8_mask` pass through untouched -- the
+        (Requirement 3.6). `batch.baseline` (which is also the state
+        channel's input), `batch.cd4_mask`, and `batch.cd8_mask` pass
+        through untouched -- the
         same objects the batch holds. `protocol` is the batch's own tensor
         under `ProtocolMode.ACTIVE`, and a zero tensor of identical shape and
         dtype under `ProtocolMode.ZEROED`.
@@ -582,7 +601,8 @@ class TorchInterventionAwareModel(nn.Module):
             protocol = torch.zeros_like(batch.protocol)
         return SharedRolloutInputs(
             baseline=batch.baseline,
-            state=batch.state_init,
+            # The state channel's input is the adjustment set itself.
+            state=batch.baseline,
             protocol=protocol,
             cd4_mask=batch.cd4_mask,
             cd8_mask=batch.cd8_mask,
@@ -617,7 +637,8 @@ class TorchInterventionAwareModel(nn.Module):
         return torch.cat([arm_column, source[:, 1:]], dim=1)
 
     def encode_representation(self, batch: TensorBatch, arm: int) -> Tensor:
-        """`z = [z_state; z_intervention; z_protocol]` for `arm`, `(N, 9)`.
+        """`z = [z_state; z_intervention; z_protocol]` for `arm`,
+        `(N, representation_width)`.
 
         Exposed so the channel-width property (Correctness Property 13) can
         be checked without running a full rollout.

@@ -44,6 +44,7 @@ torch = pytest.importorskip("torch")
 
 from torch import nn  # noqa: E402
 
+from causal.propensity import COVARIATE_FIELDS  # noqa: E402
 from cohorts.cohort_construction import PatientRecord  # noqa: E402
 from data.event_model import ClinicalEvent, MissingnessState  # noqa: E402
 from data.timelines import build_patient_timeline  # noqa: E402
@@ -53,7 +54,6 @@ from models.dataset import (  # noqa: E402
     PatientDatasetBuilder,
 )
 from models.sequence_baseline import (  # noqa: E402
-    BASELINE_STATE_INIT_FIELDS,
     CD4_LAB_CONCEPT_ID,
     CD8_LAB_CONCEPT_ID,
     INPUT_SIZE,
@@ -334,7 +334,9 @@ def test_layer_widths_trace_to_the_prototype_constants(model):
     drift is a shape error rather than a silent divergence (task 9's parent
     body, Requirement 2.1)."""
     assert model.landmark_count == N_LANDMARKS == len(LANDMARK_WEEKS)
-    assert model.state_init_projection.in_features == len(BASELINE_STATE_INIT_FIELDS)
+    # h_0 is seeded from the Section 13 adjustment set (decisions.md Section
+    # 26 amendment of 2026-10-16), not the prototype's four fields.
+    assert model.state_init_projection.in_features == len(COVARIATE_FIELDS)
     assert model.gru.input_size == INPUT_SIZE
     assert model.state_head.out_features == STATE_DIM
     assert model.hazard_head.out_features == SURVIVAL_BIN_COUNT
@@ -364,8 +366,8 @@ def test_landmark_count_and_widths_are_load_bearing(batch):
 
     with pytest.raises(ValueError, match="landmark_count"):
         TorchSequenceGRU(_with(landmark_count=N_LANDMARKS + 1))
-    with pytest.raises(ValueError, match="state_width"):
-        TorchSequenceGRU(_with(state_width=len(BASELINE_STATE_INIT_FIELDS) + 1))
+    with pytest.raises(ValueError, match="baseline_covariate_width"):
+        TorchSequenceGRU(_with(baseline_covariate_width=0))
     with pytest.raises(ValueError, match="survival_bin_count"):
         TorchSequenceGRU(_with(survival_bin_count=SURVIVAL_BIN_COUNT - 1))
     with pytest.raises(ValueError, match="hidden_size"):
@@ -429,7 +431,7 @@ def test_forward_from_tensors_matches_forward(model, batch):
     model.eval()
     with torch.no_grad():
         from_batch = model(batch)
-        from_tensors = model.forward_from_tensors(batch.state_init, assemble_sequence_input(batch))
+        from_tensors = model.forward_from_tensors(batch.baseline, assemble_sequence_input(batch))
 
     assert torch.equal(from_batch.hazards, from_tensors.hazards)
     assert torch.equal(from_batch.state_pred, from_tensors.state_pred)
@@ -437,9 +439,9 @@ def test_forward_from_tensors_matches_forward(model, batch):
 
 def test_malformed_batch_shapes_are_rejected(model, batch):
     """A width disagreement is a named error, not a broadcast."""
-    wrong_state_init = dataclasses.replace(batch, state_init=batch.state_init[:, :-1])
-    with pytest.raises(ValueError, match="state_init"):
-        model(wrong_state_init)
+    wrong_baseline = dataclasses.replace(batch, baseline=batch.baseline[:, :-1])
+    with pytest.raises(ValueError, match="baseline"):
+        model(wrong_baseline)
 
     wrong_landmarks = dataclasses.replace(batch, cd4=batch.cd4[:, :-1])
     with pytest.raises(ValueError, match="cd4"):
@@ -475,5 +477,38 @@ def test_first_landmark_prediction_comes_from_the_baseline_initialized_state(mod
     covariates set (Requirement 2.1)."""
     with torch.no_grad():
         output = model(batch)
-        h0 = torch.tanh(model.state_init_projection(batch.state_init))
+        h0 = torch.tanh(model.state_init_projection(batch.baseline))
         assert torch.allclose(output.state_pred[:, 0], model.state_head(h0))
+
+
+def test_survival_hazards_never_see_post_baseline_labs(model, batch):
+    """The outcome is predicted from time zero (decisions.md Section 26
+    amendment of 2026-10-16): changing the week-20 or week-96 CD4/CD8 leaves
+    the hazards bitwise unchanged; changing a baseline covariate or the
+    treatment moves them."""
+    with torch.no_grad():
+        reference = model(batch).hazard_logits
+        for landmark in range(1, N_LANDMARKS):
+            cd4 = batch.cd4.clone()
+            cd8 = batch.cd8.clone()
+            cd4[:, landmark] += 7.0
+            cd8[:, landmark] -= 7.0
+            perturbed = model(dataclasses.replace(batch, cd4=cd4, cd8=cd8)).hazard_logits
+            assert torch.equal(perturbed, reference), f"landmark {landmark} leaked"
+
+        shifted_baseline = dataclasses.replace(batch, baseline=batch.baseline + 1.0)
+        assert not torch.equal(model(shifted_baseline).hazard_logits, reference)
+        flipped = dataclasses.replace(batch, treatment_arm=1.0 - batch.treatment_arm)
+        assert not torch.equal(model(flipped).hazard_logits, reference)
+
+
+def test_gru_reads_every_adjustment_set_column(model, batch):
+    """Each of the Section 13 columns, perturbed alone, moves the GRU's
+    hazards, so no confounder is silently dropped."""
+    with torch.no_grad():
+        reference = model(batch).hazard_logits
+        for column in range(batch.baseline.shape[1]):
+            baseline = batch.baseline.clone()
+            baseline[:, column] += 1.0
+            perturbed = model(dataclasses.replace(batch, baseline=baseline)).hazard_logits
+            assert not torch.equal(perturbed, reference), COVARIATE_FIELDS[column]

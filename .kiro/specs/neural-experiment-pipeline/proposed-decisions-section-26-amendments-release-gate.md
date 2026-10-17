@@ -72,10 +72,14 @@ Seed 101 (CPU) after the change: MAE 0.656 (intervention-aware) against
 the temporal witness still fails. That is now a genuine result about the
 models, and it is reported, not tuned.
 
-**Recorded for a separate decision.** The GRU's survival-hazard head reads
-the final hidden state, which has already consumed the week-20 and week-96
-labs (`design.md` Section 3.2). The outcome is predicted from time zero, so
-this may count as future information.
+**Resolved 2026-10-16.** The GRU's survival-hazard head read the final
+hidden state, which had already consumed the week-20 and week-96 labs. The
+Section 26 amendment of 2026-10-16 moves it to the time-zero hidden state.
+The same amendment also makes both neural models read the full Section 13
+adjustment set: they had been reading only 4 of its 14 columns, so 3 of the
+6 selection confounders were invisible to them. It also freezes a stopping
+rule: these are the last model-design changes before the locked
+evaluation.
 
 ---
 

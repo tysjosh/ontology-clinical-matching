@@ -30,6 +30,7 @@ torch = pytest.importorskip("torch")
 from torch import nn  # noqa: E402
 
 from causal.baselines import HORIZON_WEEKS  # noqa: E402
+from causal.propensity import COVARIATE_FIELDS  # noqa: E402
 from models.dataset import (  # noqa: E402
     BIN_WIDTH_WEEKS,
     LANDMARK_COUNT,
@@ -41,7 +42,6 @@ from models.dataset import (  # noqa: E402
 from models.intervention_aware import (  # noqa: E402
     INTERVENTION_INPUT_DIM,
     PROTOCOL_INPUT_DIM,
-    STATE_INPUT_DIM,
 )
 from models.torch_intervention_aware import (  # noqa: E402
     HIDDEN_SIZE,
@@ -117,14 +117,16 @@ def test_widths_come_from_the_imported_frozen_constants():
     assert HIDDEN_SIZE == 16
     assert model.hidden_size == HIDDEN_SIZE
     assert model.gru_cell.hidden_size == HIDDEN_SIZE
-    assert model.state_encoder.in_features == STATE_INPUT_DIM
+    # The state channel reads the Section 13 adjustment set (decisions.md
+    # Section 26 amendment of 2026-10-16), so its width is that block's.
+    assert model.state_encoder.in_features == len(COVARIATE_FIELDS)
     assert model.intervention_encoder.in_features == INTERVENTION_INPUT_DIM
     assert model.protocol_encoder.in_features == PROTOCOL_INPUT_DIM
-    assert model.state_channel_width == STATE_INPUT_DIM
+    assert model.state_channel_width == len(COVARIATE_FIELDS)
     assert model.intervention_channel_width == INTERVENTION_INPUT_DIM
     assert model.protocol_channel_width == PROTOCOL_INPUT_DIM
     assert model.representation_width == (
-        STATE_INPUT_DIM + INTERVENTION_INPUT_DIM + PROTOCOL_INPUT_DIM
+        len(COVARIATE_FIELDS) + INTERVENTION_INPUT_DIM + PROTOCOL_INPUT_DIM
     )
     assert model.gru_cell.input_size == model.representation_width
     assert model.hazard_head_arm0.out_features == SURVIVAL_BIN_COUNT
@@ -286,7 +288,7 @@ def test_shared_inputs_pass_the_batch_tensors_through_untouched():
     shared = model.shared_inputs(batch)
 
     assert shared.baseline is batch.baseline
-    assert shared.state is batch.state_init
+    assert shared.state is batch.baseline  # the state channel reads the adjustment set
     assert shared.protocol is batch.protocol
     assert shared.cd4_mask is batch.cd4_mask
     assert shared.cd8_mask is batch.cd8_mask
@@ -422,7 +424,7 @@ def test_no_submodule_may_produce_an_outcome_independently_of_the_hazards():
     for name, module in model.named_children():
         if isinstance(module, nn.Linear):
             assert module.out_features in (
-                STATE_INPUT_DIM,
+                len(COVARIATE_FIELDS),
                 INTERVENTION_INPUT_DIM,
                 PROTOCOL_INPUT_DIM,
                 STATE_PREDICTION_WIDTH,
@@ -484,3 +486,23 @@ def test_forward_rejects_a_batch_whose_widths_disagree_with_the_model():
 
     with pytest.raises(ValueError, match="batch.protocol"):
         model(batch, 1)
+
+
+def test_every_adjustment_set_column_reaches_the_counterfactual_rollout():
+    """decisions.md Section 26 amendment of 2026-10-16: the state channel
+    reads the full Section 13 adjustment set, so each column, perturbed
+    alone, moves both arms' hazards -- no confounder is silently dropped."""
+    import dataclasses
+
+    batch = _batch()
+    model = _model()
+    with torch.no_grad():
+        reference = model.rollout_both_arms(batch)
+        for column in range(batch.baseline.shape[1]):
+            baseline = batch.baseline.clone()
+            baseline[:, column] += 1.0
+            perturbed = model.rollout_both_arms(dataclasses.replace(batch, baseline=baseline))
+            for arm in ("arm_0", "arm_1"):
+                assert not torch.equal(
+                    getattr(perturbed, arm).hazard_logits, getattr(reference, arm).hazard_logits
+                ), f"{COVARIATE_FIELDS[column]} does not reach {arm}"

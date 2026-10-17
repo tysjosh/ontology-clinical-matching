@@ -91,12 +91,12 @@ def test_sequence_gru_width_tracks_dimensions_not_a_literal():
     variant = _variant(model_family="sequence_gru", treatment_representation="ordinary_feature")
     model = build_model(variant, DIMENSIONS, seed=1)
     assert model.gru.input_size == 3  # cd4, cd8, treatment_arm -- INPUT_SIZE
-    assert model.state_init_projection.in_features == DIMENSIONS.state_width
+    assert model.state_init_projection.in_features == DIMENSIONS.baseline_covariate_width
 
 
 def test_intervention_aware_width_tracks_dimensions_not_a_literal():
     model = build_model(COMPLETE, DIMENSIONS, seed=1)
-    assert model.state_channel_width == DIMENSIONS.state_width
+    assert model.state_channel_width == DIMENSIONS.baseline_covariate_width
     assert model.intervention_channel_width == DIMENSIONS.intervention_width
     assert model.protocol_channel_width == DIMENSIONS.protocol_width
 

@@ -10,8 +10,8 @@ and over `hypothesis`-generated cohorts:
 
 - **Property 13** -- capacity-matched channel width invariance. Every mode
   combination yields the same per-channel widths, the same concatenated
-  representation width `STATE_INPUT_DIM + INTERVENTION_INPUT_DIM +
-  PROTOCOL_INPUT_DIM` (4 + 3 + 2), and the same parameter shapes as the
+  representation width `len(COVARIATE_FIELDS) + INTERVENTION_INPUT_DIM +
+  PROTOCOL_INPUT_DIM` (14 + 3 + 2), and the same parameter shapes as the
   complete model, so an ablation changes channel *content* and never
   capacity.
 - **Property 14** -- both halves. (a) Within one `rollout_both_arms` call the
@@ -62,6 +62,7 @@ from hypothesis import strategies as st
 
 torch = pytest.importorskip("torch")
 
+from causal.propensity import COVARIATE_FIELDS  # noqa: E402
 from cohorts.cohort_construction import PatientRecord  # noqa: E402
 from models.dataset import (  # noqa: E402
     LANDMARK_COUNT,
@@ -71,7 +72,6 @@ from models.dataset import (  # noqa: E402
 from models.intervention_aware import (  # noqa: E402
     INTERVENTION_INPUT_DIM,
     PROTOCOL_INPUT_DIM,
-    STATE_INPUT_DIM,
 )
 from models.torch_intervention_aware import (  # noqa: E402
     SHARED_INPUT_FIELDS,
@@ -99,10 +99,14 @@ _MODE_IDS: tuple[str, ...] = tuple(
     f"{intervention.name}-{protocol.name}" for intervention, protocol in _MODE_COMBINATIONS
 )
 
-#: The frozen representation width, written as the sum of the imported
-#: channel widths rather than as `9` (`decisions.md` Section 25's own
-#: arithmetic, 4 + 3 + 2).
-_REPRESENTATION_WIDTH: int = STATE_INPUT_DIM + INTERVENTION_INPUT_DIM + PROTOCOL_INPUT_DIM
+#: The state channel's width: the adjustment set's encoded width
+#: (`len(COVARIATE_FIELDS)`, 14), since the `decisions.md` Section 26
+#: amendment of 2026-10-16 made the state channel read `TensorBatch.baseline`.
+_STATE_CHANNEL_WIDTH: int = len(COVARIATE_FIELDS)
+
+#: The representation width, written as the sum of the channel widths
+#: rather than as a literal (14 + 3 + 2).
+_REPRESENTATION_WIDTH: int = _STATE_CHANNEL_WIDTH + INTERVENTION_INPUT_DIM + PROTOCOL_INPUT_DIM
 
 #: Cohort properties build up to six records of ~14 events each, fit the
 #: builder, and run four rollouts per example, across six parameterizations.
@@ -325,7 +329,7 @@ def test_property_13_every_mode_combination_has_the_complete_width_and_capacity(
     complete = _build_model(*_COMPLETE_MODES)
     ablated = _build_model(intervention_mode, protocol_mode, placebo_vector=placebo_vector)
 
-    assert ablated.state_channel_width == complete.state_channel_width == STATE_INPUT_DIM
+    assert ablated.state_channel_width == complete.state_channel_width == _STATE_CHANNEL_WIDTH
     assert (
         ablated.intervention_channel_width
         == complete.intervention_channel_width

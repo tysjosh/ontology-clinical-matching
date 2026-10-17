@@ -133,7 +133,7 @@ from models.losses import (
     total_loss,
 )
 from models.torch_intervention_aware import TorchInterventionAwareModel, outcome_from_hazards
-from models.torch_sequence_gru import TorchSequenceGRU
+from models.torch_sequence_gru import OUTCOME_HIDDEN_INDEX, TorchSequenceGRU
 from models.training import EarlyStopping
 
 # ---------------------------------------------------------------------------
@@ -363,7 +363,8 @@ def factual_outputs(model: nn.Module, batch: TensorBatch) -> FactualOutputs:
             state_pred=output.state_pred,
             hazard_logits=output.hazard_logits,
             hazards=output.hazards,
-            representation=output.hidden_states[:, -1, :],
+            # The state the hazard head reads (time-zero information only).
+            representation=output.hidden_states[:, OUTCOME_HIDDEN_INDEX, :],
         )
     if isinstance(model, TorchInterventionAwareModel):
         pair = model.rollout_both_arms(batch)

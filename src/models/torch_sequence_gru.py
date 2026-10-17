@@ -22,10 +22,12 @@ body):
   **no separate intervention encoder** (Requirement 2.2). That contrast is
   the entire point of this baseline: the explicit-channel model is
   `models.torch_intervention_aware`.
-- ``BASELINE_STATE_INIT_FIELDS`` -- the four baseline covariates that seed
-  the hidden state (Requirement 2.1). The projection is a single
-  ``nn.Linear(len(BASELINE_STATE_INIT_FIELDS), hidden_size)`` followed by
-  ``tanh``, matching the prototype's ``init_W``/``init_b`` + ``tanh``.
+- the baseline covariates that seed the hidden state (Requirement 2.1):
+  since the `decisions.md` Section 26 amendment of 2026-10-16, the full
+  14-column Section 13 adjustment set (`TensorBatch.baseline`), not the
+  prototype's four ``BASELINE_STATE_INIT_FIELDS``. The projection is a single
+  ``nn.Linear(baseline_covariate_width, hidden_size)`` followed by ``tanh``,
+  matching the prototype's ``init_W``/``init_b`` + ``tanh``.
 - ``STATE_DIM`` (= 2) -- the CD4/CD8 state-prediction width.
 
 Where this module intentionally differs from the prototype
@@ -37,7 +39,10 @@ Section 25 froze the discrete-time hazard grid at 23 bins, independently of
 the landmark timepoints, and `design.md` Section 3.2 therefore specifies a
 single ``nn.Linear(hidden_size, 23)`` head reading the **final** hidden
 state (Requirement 2.3). The bin count is read from
-`models.dataset.SURVIVAL_BIN_COUNT`, never written as a literal here.
+`models.dataset.SURVIVAL_BIN_COUNT`, never written as a literal here. That
+hidden state is the one after the time-zero landmark, not the final one (the
+amendment of 2026-10-16): the outcome is predicted from time zero, and the
+later hidden states have read the week-20 and week-96 labs.
 
 The state head is next-state regression, as Section 14.2 and the prototype
 specify: the prediction of landmark k comes from the hidden state before
@@ -127,6 +132,14 @@ __all__ = [
 #: value. Equal to `DatasetDimensions.state_width`, which the constructor
 #: checks (Requirement 2.1).
 STATE_INIT_WIDTH: int = len(BASELINE_STATE_INIT_FIELDS)
+
+#: Index into `hidden_states` of the state the survival-hazard head reads:
+#: 0, the hidden state after the time-zero landmark (baseline covariates,
+#: week-0 CD4/CD8, treatment). Never a later landmark, whose hidden state has
+#: read post-baseline labs (decisions.md Section 26 amendment of 2026-10-16).
+#: `models.torch_training.factual_outputs` reads the same index for the
+#: balance term's representation.
+OUTCOME_HIDDEN_INDEX: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -321,14 +334,14 @@ class TorchSequenceGRU(nn.Module):
         landmark_count: `N_LANDMARKS`, from the prototype.
         survival_bin_count: the hazard head's output width, from the
             `DatasetDimensions` handed in.
-        state_init_projection: `nn.Linear(4, hidden_size)`, `tanh`-activated
-            in `forward`, seeding `h_0` from the baseline covariates
-            (Requirement 2.1).
+        state_init_projection: `nn.Linear(baseline_covariate_width,
+            hidden_size)`, `tanh`-activated in `forward`, seeding `h_0` from
+            the Section 13 adjustment set (Requirement 2.1).
         gru: single-layer `nn.GRU`, `dropout=0.0`, consuming
             `[cd4, cd8, treatment_arm]` per landmark.
         state_head: `nn.Linear(hidden_size, 2)`, applied at every landmark.
-        hazard_head: `nn.Linear(hidden_size, 23)`, applied to the final
-            landmark's hidden state.
+        hazard_head: `nn.Linear(hidden_size, 23)`, applied to the hidden
+            state after the time-zero landmark (`OUTCOME_HIDDEN_INDEX`).
     """
 
     def __init__(
@@ -365,10 +378,10 @@ class TorchSequenceGRU(nn.Module):
                 f"sequence_baseline.N_LANDMARKS={N_LANDMARKS} "
                 f"(landmark weeks {LANDMARK_WEEKS!r})"
             )
-        if dimensions.state_width != STATE_INIT_WIDTH:
+        if dimensions.baseline_covariate_width <= 0:
             raise ValueError(
-                f"dimensions.state_width={dimensions.state_width} disagrees with "
-                f"len(sequence_baseline.BASELINE_STATE_INIT_FIELDS)={STATE_INIT_WIDTH}"
+                f"dimensions.baseline_covariate_width must be positive, got "
+                f"{dimensions.baseline_covariate_width!r}"
             )
         if dimensions.survival_bin_count != SURVIVAL_BIN_COUNT:
             raise ValueError(
@@ -382,7 +395,11 @@ class TorchSequenceGRU(nn.Module):
         self.survival_bin_count = dimensions.survival_bin_count
         self.dimensions = dimensions
 
-        self.state_init_projection = nn.Linear(STATE_INIT_WIDTH, hidden_size)
+        # h_0 is seeded from the full Section 13 adjustment set
+        # (`TensorBatch.baseline`), the same covariates every causal estimator
+        # adjusts for (decisions.md Section 26 amendment of 2026-10-16).
+        self.baseline_width = dimensions.baseline_covariate_width
+        self.state_init_projection = nn.Linear(self.baseline_width, hidden_size)
         self.gru = nn.GRU(
             input_size=INPUT_SIZE,
             hidden_size=hidden_size,
@@ -402,7 +419,7 @@ class TorchSequenceGRU(nn.Module):
 
         Args:
             batch: the split's tensors. Its `cd4`, `cd8`, `treatment_arm`,
-                and `state_init` fields are read; the masks and survival
+                and `baseline` fields are read; the masks and survival
                 targets belong to the loss, not to the input layer.
 
         Returns:
@@ -415,9 +432,9 @@ class TorchSequenceGRU(nn.Module):
                 and both widths.
         """
         self._validate(batch)
-        return self.forward_from_tensors(batch.state_init, assemble_sequence_input(batch))
+        return self.forward_from_tensors(batch.baseline, assemble_sequence_input(batch))
 
-    def forward_from_tensors(self, state_init: Tensor, sequence_input: Tensor) -> SequenceOutput:
+    def forward_from_tensors(self, baseline: Tensor, sequence_input: Tensor) -> SequenceOutput:
         """The tensor-level forward, for callers holding loose tensors.
 
         `forward` is the interface the pipeline uses; this is the same
@@ -425,7 +442,8 @@ class TorchSequenceGRU(nn.Module):
         from hand-built tensors without fabricating a `TensorBatch`.
 
         Args:
-            state_init: `(N, 4)`, the `BASELINE_STATE_INIT_FIELDS` vector.
+            baseline: `(N, baseline_covariate_width)`, the development-
+                standardized Section 13 adjustment set (`TensorBatch.baseline`).
             sequence_input: `(N, 3, 3)`, per-landmark
                 `[cd4, cd8, treatment_arm]` as `assemble_sequence_input`
                 lays it out.
@@ -437,7 +455,7 @@ class TorchSequenceGRU(nn.Module):
         # hidden state sits in the same range GRU hidden states occupy after
         # a step -- the prototype's `init_W`/`init_b` + `tanh`
         # (Requirement 2.1). `nn.GRU` wants `(num_layers, N, hidden_size)`.
-        initial_hidden = torch.tanh(self.state_init_projection(state_init)).unsqueeze(0)
+        initial_hidden = torch.tanh(self.state_init_projection(baseline)).unsqueeze(0)
 
         hidden_states, _final = self.gru(sequence_input, initial_hidden)
 
@@ -456,11 +474,14 @@ class TorchSequenceGRU(nn.Module):
         )
         state_pred = self.state_head(preceding_hidden)
 
-        # One hazard per frozen survival bin, from the final landmark's
-        # hidden state (`design.md` Section 3.2). Sigmoid, so `hazards`
-        # carries probabilities in the prototype's convention.
-        final_hidden = hidden_states[:, -1, :]
-        hazard_logits = self.hazard_head(final_hidden)
+        # One hazard per frozen survival bin, from the hidden state after the
+        # time-zero landmark only (`OUTCOME_HIDDEN_INDEX`): baseline
+        # covariates, week-0 CD4/CD8, and treatment. The survival outcome is
+        # predicted from time zero, so it must not read the week-20 or
+        # week-96 labs the later hidden states have consumed (decisions.md
+        # Section 26 amendment of 2026-10-16; until then this read the final
+        # hidden state). Sigmoid, so `hazards` carries probabilities.
+        hazard_logits = self.hazard_head(hidden_states[:, OUTCOME_HIDDEN_INDEX, :])
 
         return SequenceOutput(
             state_pred=state_pred,
@@ -481,10 +502,10 @@ class TorchSequenceGRU(nn.Module):
                     f"batch.{field_name} must have shape (N, {expected_landmarks}), "
                     f"got {tuple(tensor.shape)}"
                 )
-        if batch.state_init.dim() != 2 or batch.state_init.shape[1] != STATE_INIT_WIDTH:
+        if batch.baseline.dim() != 2 or batch.baseline.shape[1] != self.baseline_width:
             raise ValueError(
-                f"batch.state_init must have shape (N, {STATE_INIT_WIDTH}), "
-                f"got {tuple(batch.state_init.shape)}"
+                f"batch.baseline must have shape (N, {self.baseline_width}), "
+                f"got {tuple(batch.baseline.shape)}"
             )
         if batch.treatment_arm.dim() != 1:
             raise ValueError(
@@ -494,7 +515,7 @@ class TorchSequenceGRU(nn.Module):
         row_counts = {
             "cd4": batch.cd4.shape[0],
             "cd8": batch.cd8.shape[0],
-            "state_init": batch.state_init.shape[0],
+            "baseline": batch.baseline.shape[0],
             "treatment_arm": batch.treatment_arm.shape[0],
         }
         if len(set(row_counts.values())) != 1:
